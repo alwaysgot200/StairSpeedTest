@@ -2,16 +2,47 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build (Debug - MinGW)",
-      "type": "shell",
-      "command": "D:\\Programs\\scoop\\apps\\msys2\\2025-08-30\\usr\\bin\\bash.exe",
+      "label": "Configure CMake",
+      "type": "process",
+      "command": "cmake",
       "args": [
-        "-lc",
-        "export PATH=\"/mingw64/bin:$PATH\"; /d/Programs/scoop/apps/msys2/2025-08-30/cmakeproxy -S . -B build.debug -G 'MinGW Makefiles' -DCMAKE_BUILD_TYPE=RelWithDebInfo && /d/Programs/scoop/apps/msys2/2025-08-30/cmakeproxy --build build.debug -j"
+        "-S",
+        ".",
+        "-B",
+        "build.debug",
+        "-G",
+        "MinGW Makefiles",
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DCMAKE_PREFIX_PATH=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64",
+        "-DCMAKE_C_COMPILER=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\gcc.exe",
+        "-DCMAKE_CXX_COMPILER=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\g++.exe"
       ],
-      "options": { "cwd": "${workspaceFolder}" },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "D:\\Programs\\scoop\\apps\\msys2\\current\\cmakeproxy;D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin;D:\\Programs\\scoop\\apps\\msys2\\current\\usr\\bin;D:\\Programs\\scoop\\apps\\msys2\\current\\bin;${env:PATH}"
+        }
+      },
       "problemMatcher": ["$gcc"],
-      "group": { "kind": "build", "isDefault": true }
+      "group": "build"
+    },
+    {
+      "label": "Build (Debug - MinGW)",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--build", "build.debug", "-j"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "D:\\Programs\\scoop\\apps\\msys2\\current\\cmakeproxy;D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin;D:\\Programs\\scoop\\apps\\msys2\\current\\usr\\bin;D:\\Programs\\scoop\\apps\\msys2\\current\\bin;${env:PATH}"
+        }
+      },
+      "dependsOn": "Configure CMake",
+      "problemMatcher": ["$gcc"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
     }
   ]
 }

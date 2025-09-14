@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.5)
 project(stairspeedtest LANGUAGES CXX)
 SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 INCLUDE_DIRECTORIES("${CMAKE_SOURCE_DIR}/include/")
+# Add system include directories
+# include_directories(SYSTEM "/d/Programs/scoop/apps/msys2/2025-08-30/mingw64/include")
+# include_directories(SYSTEM "/d/Programs/scoop/apps/msys2/2025-08-30/mingw64/x86_64-w64-mingw32/include")
+
+# Fix for GCC bug #70129 - prevents stdlib.h: No such file or directory
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
 IF(NOT CMAKE_BUILD_TYPE)
     SET(CMAKE_BUILD_TYPE Release)
 ENDIF()
@@ -51,6 +57,21 @@ ADD_EXECUTABLE(stairspeedtest
 	src/webget.cpp
 	src/webgui_wrapper.cpp
 	src/webserver_libevent.cpp)
+# 将运行时资源复制到可执行文件所在目录（例如 build.debug）
+add_custom_command(TARGET stairspeedtest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/base/pref.ini"
+            "$<TARGET_FILE_DIR:stairspeedtest>/pref.ini"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/base/config.json"
+            "$<TARGET_FILE_DIR:stairspeedtest>/config.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/base/webui"
+            "$<TARGET_FILE_DIR:stairspeedtest>/webui"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/base/tools"
+            "$<TARGET_FILE_DIR:stairspeedtest>/tools"
+)
 INCLUDE_DIRECTORIES(src)
 LINK_DIRECTORIES(${CMAKE_SOURCE_DIR})
 
@@ -90,7 +111,7 @@ INCLUDE_DIRECTORIES(${FREETYPE_INCLUDE_DIR_freetype2})
 TARGET_LINK_LIBRARIES(stairspeedtest ${FREETYPE_LIBRARIES})
 
 # Add this line before the FIND_PACKAGE(PNGwriter) call
-set(PNGwriter_DIR "/c/Users/HP/Downloads/stairspeedtest-reborn-master/pngwriter/install/lib/cmake/PNGwriter")
+set(PNGwriter_DIR "C:/Users/HP/Downloads/stairspeedtest-reborn-master/pngwriter/install/lib/cmake/PNGwriter")
 FIND_PACKAGE(PNGwriter 0.7.0 REQUIRED)
 INCLUDE_DIRECTORIES(${PNGwriter_INCLUDE_DIRS})
 TARGET_LINK_LIBRARIES(stairspeedtest PNGwriter::PNGwriter)

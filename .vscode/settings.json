@@ -1,7 +1,7 @@
 {
   "cmake.configureSettings": {
-    "CMAKE_C_COMPILER": "gcc",
-    "CMAKE_CXX_COMPILER": "g++"
+    "CMAKE_C_COMPILER": "D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\gcc.exe",
+    "CMAKE_CXX_COMPILER": "D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\g++.exe"
   },
   "cmake.options.advanced": {
     "build": {
@@ -16,5 +16,10 @@
       "statusBarVisibility": "inherit",
       "inheritDefault": "visible"
     }
-  }
+  },
+  "C_Cpp_Runner.cCompilerPath": "gcc",
+  "C_Cpp_Runner.cppCompilerPath": "g++",
+  "C_Cpp_Runner.debuggerPath": "gdb",
+  "C_Cpp_Runner.cStandard": "c11",
+  "C_Cpp_Runner.cppStandard": "c++20"
 }
