@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug (gdb, MinGW)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\build.debug\\stairspeedtest.exe",
+      "args": ["/web"],
+      "cwd": "${workspaceFolder}\\base",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "D:\\Programs\\scoop\\apps\\msys2\\2025-08-30\\mingw64\\bin;${env:PATH}"
+        }
+      ],
+      "MIMode": "gdb",
+      "miDebuggerPath": "D:\\Programs\\scoop\\apps\\msys2\\2025-08-30\\mingw64\\bin\\gdb.exe",
+      "externalConsole": false,
+      "console": "integratedTerminal",
+      "preLaunchTask": "Build (Debug - MinGW)"
+    }
+  ]
+}

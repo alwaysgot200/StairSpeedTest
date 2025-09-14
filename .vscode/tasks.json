@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build (Debug - MinGW)",
+      "type": "shell",
+      "command": "D:\\Programs\\scoop\\apps\\msys2\\2025-08-30\\usr\\bin\\bash.exe",
+      "args": [
+        "-lc",
+        "export PATH=\"/mingw64/bin:$PATH\"; /d/Programs/scoop/apps/msys2/2025-08-30/cmakeproxy -S . -B build.debug -G 'MinGW Makefiles' -DCMAKE_BUILD_TYPE=RelWithDebInfo && /d/Programs/scoop/apps/msys2/2025-08-30/cmakeproxy --build build.debug -j"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true }
+    }
+  ]
+}

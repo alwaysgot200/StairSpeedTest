@@ -1,0 +1,20 @@
+{
+  "cmake.configureSettings": {
+    "CMAKE_C_COMPILER": "gcc",
+    "CMAKE_CXX_COMPILER": "g++"
+  },
+  "cmake.options.advanced": {
+    "build": {
+      "statusBarVisibility": "inherit",
+      "inheritDefault": "visible"
+    },
+    "launch": {
+      "statusBarVisibility": "inherit",
+      "inheritDefault": "visible"
+    },
+    "debug": {
+      "statusBarVisibility": "inherit",
+      "inheritDefault": "visible"
+    }
+  }
+}

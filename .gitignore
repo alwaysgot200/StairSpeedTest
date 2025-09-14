@@ -1,0 +1,157 @@
+# -----------------------
+# OS junk
+# -----------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -----------------------
+# Editors / IDEs
+# -----------------------
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# -----------------------
+# C/C++ build artifacts
+# -----------------------
+# Generic build dirs
+/build/
+/build.*/
+**/CMakeFiles/
+/CMakeFiles/
+/cmake-build-*/
+CMakeCache.txt
+cmake_install.cmake
+CMakeScripts/
+CTestTestfile.cmake
+Testing/
+DartConfiguration.tcl
+
+# Make/Ninja
+Makefile
+**/makefile
+**/Makefile
+**/*.make
+**/*.ninja
+.ninja_deps
+.ninja_log
+
+# Objects / archives / libs
+**/*.o
+**/*.obj
+**/*.lo
+**/*.la
+**/*.a
+**/*.lib
+**/*.lai
+
+# Executables and shared libraries
+**/*.exe
+**/*.dll
+**/*.so
+**/*.so.*
+**/*.dylib
+
+# Debug / PDB / Intermediate
+**/*.pdb
+**/*.ilk
+**/*.exp
+**/*.idb
+**/*.iobj
+**/*.ipdb
+**/*.dSYM/
+
+# Response/Cache/PCH
+**/*.rsp
+**/*.pch
+**/*.cache
+**/*.ccache
+**/*.tlog
+
+# Coverage
+**/*.gcda
+**/*.gcno
+**/*.gcov
+coverage/
+lcov.info
+
+# Compilation database (opt-in; uncomment to ignore)
+# compile_commands.json
+
+# -----------------------
+# Project runtime outputs
+# -----------------------
+/base/logs/
+/base/results/
+/base/nohup.out
+
+# If build scripts copy artifacts into base/, ignore those produced files:
+# (Keep config/pref/webui sources tracked)
+# Uncomment if you don't want to track packaged runtime exe copied to base
+# /base/*.exe
+# /base/*.dll
+
+# -----------------------
+# PNGwriter local install / builds (if used locally)
+# -----------------------
+/pngwriter/install/
+/pngwriter/build/
+/pngwriter/.vs/
+
+# -----------------------
+# Node/Web frontend (future-proof)
+# -----------------------
+node_modules/
+/dist/
+/build-web/
+/.out/
+/.next/
+/.nuxt/
+/.umi/
+/.vite/
+/.vitepress/cache
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+.pnpm-store/
+npm-debug.log*
+yarn-error.log*
+.eslintcache
+.stylelintcache
+.parcel-cache/
+/coverage/
+.esbuild/
+rollup.cache
+
+# -----------------------
+# Python (if scripts/tooling are added)
+# -----------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pytest_cache/
+.venv/
+venv/
+.env
+.env.*
+
+# -----------------------
+# Temporary / swap / archives
+# -----------------------
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.orig
+*.old
+*.log
+*.tgz
+*.tar.gz
+*.zip
+*.7z
+*.rar
