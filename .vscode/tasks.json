@@ -27,7 +27,7 @@
       "group": "build"
     },
     {
-      "label": "Build (Debug - MinGW)",
+      "label": "Build (Debug - MSYS2 bash)",
       "type": "process",
       "command": "cmake",
       "args": ["--build", "build.debug", "-j"],

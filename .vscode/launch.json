@@ -27,7 +27,7 @@
         }
       ],
       "externalConsole": true,
-      "preLaunchTask": "Build (Debug - MinGW)",
+      "preLaunchTask": "Build (Debug - MSYS2 bash)",
       "stopAtEntry": false,
       "setupCommands": [
         {
