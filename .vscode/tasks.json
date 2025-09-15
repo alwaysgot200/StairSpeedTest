@@ -14,6 +14,7 @@
         "MinGW Makefiles",
         "-DCMAKE_BUILD_TYPE=Debug",
         "-DCMAKE_PREFIX_PATH=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64",
+        "-DMINGW_RUNTIME_DIR=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin",
         "-DCMAKE_C_COMPILER=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\gcc.exe",
         "-DCMAKE_CXX_COMPILER=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\g++.exe"
       ],

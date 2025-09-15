@@ -38,6 +38,9 @@ IF(HAVE_MSG_NOSIGNAL)
 	ADD_DEFINITIONS(-DHAVE_MSG_NOSIGNAL)
 ENDIF()
 
+# 指定 MinGW 运行时 DLL 所在目录（为你当前机器的 Scoop MSYS2 默认路径，可按需修改或在配置时用 -D 覆盖）
+set(MINGW_RUNTIME_DIR "D:/Programs/scoop/apps/msys2/current/mingw64/bin" CACHE PATH "MinGW runtime bin directory (e.g. D:/Programs/scoop/apps/msys2/current/mingw64/bin)")
+
 ADD_EXECUTABLE(stairspeedtest 
 	src/confbuild.cpp
 	src/geoip.cpp
@@ -133,8 +136,42 @@ ELSE()
 ENDIF()
 
 IF(WIN32)
-	TARGET_LINK_LIBRARIES(stairspeedtest wsock32 ws2_32)
+    TARGET_LINK_LIBRARIES(stairspeedtest wsock32 ws2_32)
+
+    # 自动收集并拷贝运行期依赖 DLL（构建后执行）
+    # 若未通过 -DMINGW_RUNTIME_DIR 指定，尝试从环境或 CMAKE_PREFIX_PATH 推断（作为兜底）
+    if(NOT DEFINED MINGW_RUNTIME_DIR)
+        if(DEFINED ENV{MSYSTEM_PREFIX} AND EXISTS "$ENV{MSYSTEM_PREFIX}/bin")
+            set(MINGW_RUNTIME_DIR "$ENV{MSYSTEM_PREFIX}/bin" CACHE PATH "Path to MinGW runtime bin" FORCE)
+        elseif(CMAKE_PREFIX_PATH AND EXISTS "${CMAKE_PREFIX_PATH}/bin")
+            set(MINGW_RUNTIME_DIR "${CMAKE_PREFIX_PATH}/bin" CACHE PATH "Path to MinGW runtime bin" FORCE)
+        else()
+            set(MINGW_RUNTIME_DIR "" CACHE PATH "Path to MinGW runtime bin")
+        endif()
+    endif()
+    message(STATUS "MINGW_RUNTIME_DIR='${MINGW_RUNTIME_DIR}'")
+
+    # 构造运行期 DLL 搜索目录列表（优先使用 MINGW_RUNTIME_DIR）
+    set(RUNTIME_DLL_SEARCH_DIRS "")
+    if(MINGW_RUNTIME_DIR)
+        list(APPEND RUNTIME_DLL_SEARCH_DIRS "${MINGW_RUNTIME_DIR}")
+    endif()
+    if(DEFINED ENV{MSYSTEM_PREFIX})
+        list(APPEND RUNTIME_DLL_SEARCH_DIRS "$ENV{MSYSTEM_PREFIX}/bin")
+    endif()
+    list(APPEND RUNTIME_DLL_SEARCH_DIRS "/mingw64/bin")
+    list(REMOVE_DUPLICATES RUNTIME_DLL_SEARCH_DIRS)
+    message(STATUS "RUNTIME_DLL_SEARCH_DIRS='${RUNTIME_DLL_SEARCH_DIRS}'")
+
+    add_custom_command(TARGET stairspeedtest POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -Dexe_path=$<TARGET_FILE:stairspeedtest>
+            -Ddest_dir=$<TARGET_FILE_DIR:stairspeedtest>
+            -Dsearch_dirs="${RUNTIME_DLL_SEARCH_DIRS}"
+            -P "${CMAKE_SOURCE_DIR}/cmake/copy_runtime_deps.cmake"
+        VERBATIM
+    )
 ELSE()
-	INCLUDE(GNUInstallDirs)
-	INSTALL(TARGETS stairspeedtest DESTINATION ${CMAKE_INSTALL_BINDIR})
+    INCLUDE(GNUInstallDirs)
+    INSTALL(TARGETS stairspeedtest DESTINATION ${CMAKE_INSTALL_BINDIR})
 ENDIF()
