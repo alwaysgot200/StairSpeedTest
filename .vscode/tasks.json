@@ -9,19 +9,19 @@
         "-S",
         ".",
         "-B",
-        "build.debug",
+        "build",
         "-G",
         "MinGW Makefiles",
         "-DCMAKE_BUILD_TYPE=Debug",
-        "-DCMAKE_PREFIX_PATH=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64",
-        "-DMINGW_RUNTIME_DIR=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin",
-        "-DCMAKE_C_COMPILER=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\gcc.exe",
-        "-DCMAKE_CXX_COMPILER=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\g++.exe"
+        "-DCMAKE_PREFIX_PATH=${env:MSYS2_ROOT}\\mingw64",
+        "-DMINGW64_ROOT=${env:MSYS2_ROOT}\\mingw64",
+        "-DCMAKE_C_COMPILER=${env:MSYS2_ROOT}\\mingw64\\bin\\gcc.exe",
+        "-DCMAKE_CXX_COMPILER=${env:MSYS2_ROOT}\\mingw64\\bin\\g++.exe"
       ],
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {
-          "PATH": "D:\\Programs\\scoop\\apps\\msys2\\current\\cmakeproxy;D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin;D:\\Programs\\scoop\\apps\\msys2\\current\\usr\\bin;D:\\Programs\\scoop\\apps\\msys2\\current\\bin;${env:PATH}"
+          "PATH": "${env:MSYS2_ROOT}\\cmakeproxy;${env:MSYS2_ROOT}\\mingw64\\bin;${env:MSYS2_ROOT}\\usr\\bin;${env:MSYS2_ROOT}\\bin;${env:PATH}"
         }
       },
       "problemMatcher": ["$gcc"],
@@ -31,11 +31,11 @@
       "label": "Build (Debug - MSYS2 bash)",
       "type": "process",
       "command": "cmake",
-      "args": ["--build", "build.debug", "-j"],
+      "args": ["--build", "build", "-j"],
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {
-          "PATH": "D:\\Programs\\scoop\\apps\\msys2\\current\\cmakeproxy;D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin;D:\\Programs\\scoop\\apps\\msys2\\current\\usr\\bin;D:\\Programs\\scoop\\apps\\msys2\\current\\bin;${env:PATH}"
+          "PATH": "${env:MSYS2_ROOT}\\cmakeproxy;${env:MSYS2_ROOT}\\mingw64\\bin;${env:MSYS2_ROOT}\\usr\\bin;${env:MSYS2_ROOT}\\bin;${env:PATH}"
         }
       },
       "dependsOn": "Configure CMake",

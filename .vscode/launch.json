@@ -5,25 +5,31 @@
       "name": "Debug (gdb via MSYS2 bash)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build.debug/stairspeedtest.exe",
-      "cwd": "${workspaceFolder}/build.debug",
+      "program": "${workspaceFolder}/build/stairspeedtest.exe",
+      "cwd": "${workspaceFolder}/build",
       "args": ["/web"],
       "MIMode": "gdb",
       "miDebuggerPath": "/mingw64/bin/gdb",
       "miDebuggerArgs": "--interpreter=mi2",
       "launchCompleteCommand": "exec-run",
       "pipeTransport": {
-        "pipeProgram": "D:/Programs/scoop/apps/msys2/current/usr/bin/bash.exe",
+        "pipeProgram": "${env:MSYS2_ROOT}/usr/bin/bash.exe",
         "pipeArgs": ["-lc"],
         "debuggerPath": "/mingw64/bin/gdb",
         "pipeCwd": ""
       },
       "environment": [
-        { "name": "MSYSTEM", "value": "MINGW64" },
-        { "name": "MSYS2_PATH_TYPE", "value": "inherit" },
+        {
+          "name": "MSYSTEM",
+          "value": "MINGW64"
+        },
+        {
+          "name": "MSYS2_PATH_TYPE",
+          "value": "inherit"
+        },
         {
           "name": "PATH",
-          "value": "D:/Programs/scoop/apps/msys2/current/cmakeproxy;D:/Programs/scoop/apps/msys2/current/mingw64/bin;D:/Programs/scoop/apps/msys2/current/usr/bin;D:/Programs/scoop/apps/msys2/current/bin;${env:PATH}"
+          "value": "${env:MSYS2_ROOT}/cmakeproxy;${env:MSYS2_ROOT}/mingw64/bin;${env:MSYS2_ROOT}/usr/bin;${env:MSYS2_ROOT}/bin;${env:PATH}"
         }
       ],
       "externalConsole": true,

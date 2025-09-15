@@ -11,19 +11,19 @@ if(NOT IS_DIRECTORY "${dest_dir}")
     message(FATAL_ERROR "dest_dir not a directory: ${dest_dir}")
 endif()
 
-# 构造依赖解析的搜索目录列表
-set(_search_dirs "")
-if(search_dirs)
-    list(APPEND _search_dirs ${search_dirs})
+# The search_dirs variable is passed from CMakeLists.txt via -Dsearch_dirs="..."
+if(NOT search_dirs)
+    message(WARNING "No search_dirs provided. Skipping DLL copy.")
+    return()
 endif()
-if(DEFINED MINGW_RUNTIME_DIR AND MINGW_RUNTIME_DIR AND EXISTS "${MINGW_RUNTIME_DIR}")
-    list(APPEND _search_dirs "${MINGW_RUNTIME_DIR}")
-endif()
-if(DEFINED ENV{MSYSTEM_PREFIX} AND EXISTS "$ENV{MSYSTEM_PREFIX}/bin")
-    list(APPEND _search_dirs "$ENV{MSYSTEM_PREFIX}/bin")
-endif()
-list(REMOVE_DUPLICATES _search_dirs)
-message(STATUS "Runtime search dirs: ${_search_dirs}")
+
+# Print out the search directories for verification
+message(STATUS "--- copy_runtime_deps.cmake ---")
+message(STATUS "Searching for runtime dependencies in the following directories:")
+foreach(dir IN LISTS search_dirs)
+    message(STATUS "  -> ${dir}")
+endforeach()
+message(STATUS "-------------------------------")
 
 # 过滤掉系统目录（避免复制系统 DLL）
 set(_pre_exclude
@@ -39,7 +39,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.14")
     set(_unresolved "")
     file(GET_RUNTIME_DEPENDENCIES
         EXECUTABLES "${exe_path}"
-        DIRECTORIES ${_search_dirs}
+        DIRECTORIES ${search_dirs}
         RESOLVED_DEPENDENCIES_VAR _deps
         UNRESOLVED_DEPENDENCIES_VAR _unresolved
         POST_EXCLUDE_REGEXES ${_pre_exclude}
