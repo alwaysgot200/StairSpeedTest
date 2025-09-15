@@ -1007,7 +1007,6 @@ int main(int argc, char* argv[])
     setcd(prgpath); //switch to program directory
 #endif // _DEBUG
     chkArg(argc, argv);
-
     makeDir("logs");
     makeDir("results");
     logInit(rpcmode);

@@ -13,10 +13,10 @@
         "-G",
         "MinGW Makefiles",
         "-DCMAKE_BUILD_TYPE=Debug",
-        "-DCMAKE_PREFIX_PATH=${env:MSYS2_ROOT}\\mingw64",
         "-DMINGW64_ROOT=${env:MSYS2_ROOT}\\mingw64",
         "-DCMAKE_C_COMPILER=${env:MSYS2_ROOT}\\mingw64\\bin\\gcc.exe",
-        "-DCMAKE_CXX_COMPILER=${env:MSYS2_ROOT}\\mingw64\\bin\\g++.exe"
+        "-DCMAKE_CXX_COMPILER=${env:MSYS2_ROOT}\\mingw64\\bin\\g++.exe",
+        "-DENABLE_RUNTIME_DLL_COPY=ON"
       ],
       "options": {
         "cwd": "${workspaceFolder}",
@@ -44,6 +44,42 @@
         "kind": "build",
         "isDefault": true
       }
+    },
+    {
+      "label": "Clean bin/lib (CMake target)",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--build", "build", "--target", "clean_outputs"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "${env:MSYS2_ROOT}\\cmakeproxy;${env:MSYS2_ROOT}\\mingw64\\bin;${env:MSYS2_ROOT}\\usr\\bin;${env:MSYS2_ROOT}\\bin;${env:PATH}"
+        }
+      },
+      "dependsOn": "Configure CMake",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean All (delete build folder)",
+      "type": "process",
+      "command": "cmd",
+      "args": ["/c", "rmdir", "/S", "/Q", "build"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Rebuild (Debug)",
+      "type": "process",
+      "command": "cmd",
+      "args": ["/c", "echo", "Rebuild"],
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Clean bin/lib (CMake target)",
+        "Build (Debug - MSYS2 bash)"
+      ],
+      "problemMatcher": []
     }
   ]
 }

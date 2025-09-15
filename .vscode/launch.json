@@ -5,8 +5,8 @@
       "name": "Debug (gdb via MSYS2 bash)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/stairspeedtest.exe",
-      "cwd": "${workspaceFolder}/build",
+      "program": "${workspaceFolder}/build/bin/stairspeedtest.exe",
+      "cwd": "${workspaceFolder}/build/bin",
       "args": ["/web"],
       "MIMode": "gdb",
       "miDebuggerPath": "/mingw64/bin/gdb",
@@ -33,7 +33,7 @@
         }
       ],
       "externalConsole": true,
-      "preLaunchTask": "Build (Debug - MSYS2 bash)",
+      "preLaunchTask": "Rebuild (Debug)",
       "stopAtEntry": false,
       "setupCommands": [
         {
