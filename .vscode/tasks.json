@@ -13,15 +13,28 @@
         "-G",
         "MinGW Makefiles",
         "-DCMAKE_BUILD_TYPE=Debug",
+        "-DCMAKE_PREFIX_PATH=${env:MSYS2_ROOT}\\mingw64",
         "-DMINGW64_ROOT=${env:MSYS2_ROOT}\\mingw64",
         "-DCMAKE_C_COMPILER=${env:MSYS2_ROOT}\\mingw64\\bin\\gcc.exe",
         "-DCMAKE_CXX_COMPILER=${env:MSYS2_ROOT}\\mingw64\\bin\\g++.exe",
-        "-DENABLE_RUNTIME_DLL_COPY=ON"
+        "-DENABLE_RUNTIME_DLL_COPY=ON",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        "-DCMAKE_COLOR_MAKEFILE=ON",
+        //"-DCMAKE_VERBOSE_MAKEFILE=ON",
+        "-DCMAKE_C_FLAGS=-fdiagnostics-color=always",
+        "-DCMAKE_CXX_FLAGS=-fdiagnostics-color=always",
+        "-DCMAKE_COLOR_DIAGNOSTICS=ON"
       ],
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {
-          "PATH": "${env:MSYS2_ROOT}\\cmakeproxy;${env:MSYS2_ROOT}\\mingw64\\bin;${env:MSYS2_ROOT}\\usr\\bin;${env:MSYS2_ROOT}\\bin;${env:PATH}"
+          "PATH": "${env:MSYS2_ROOT}\\cmakeproxy;${env:MSYS2_ROOT}\\mingw64\\bin;${env:MSYS2_ROOT}\\usr\\bin;${env:MSYS2_ROOT}\\bin;${env:PATH}",
+          // 让终端和工具链认可 ANSI 颜色
+          "TERM": "xterm-256color",
+          "CLICOLOR": "1",
+          "CLICOLOR_FORCE": "1",
+          // 自定义 GCC 颜色方案（可按喜好调整）
+          "GCC_COLORS": "error=01;31:warning=01;35:note=01;36:locus=00;34:caret=01;32:quote=01"
         }
       },
       "problemMatcher": ["$gcc"],
@@ -35,7 +48,12 @@
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {
-          "PATH": "${env:MSYS2_ROOT}\\cmakeproxy;${env:MSYS2_ROOT}\\mingw64\\bin;${env:MSYS2_ROOT}\\usr\\bin;${env:MSYS2_ROOT}\\bin;${env:PATH}"
+          "PATH": "${env:MSYS2_ROOT}\\cmakeproxy;${env:MSYS2_ROOT}\\mingw64\\bin;${env:MSYS2_ROOT}\\usr\\bin;${env:MSYS2_ROOT}\\bin;${env:PATH}",
+          // 与 Configure 阶段保持一致，确保构建阶段也有彩色输出
+          "TERM": "xterm-256color",
+          "CLICOLOR": "1",
+          "CLICOLOR_FORCE": "1",
+          "GCC_COLORS": "error=01;31:warning=01;35:note=01;36:locus=00;34:caret=01;32:quote=01"
         }
       },
       "dependsOn": "Configure CMake",

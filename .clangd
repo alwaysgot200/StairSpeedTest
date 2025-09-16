@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=
+# .clangd
+CompileFlags:
+  CompilationDatabase: build
+  # 可选：在数据库缺失时也维持与项目一致的标准（避免退回到 c++11）
+  Add: [-std=gnu++17]
+
+QueryDriver:
+  - "D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\g++.exe"
+
+# 确保使用正确的C++标准
+Standard: c++17

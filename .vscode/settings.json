@@ -17,9 +17,13 @@
       "inheritDefault": "visible"
     }
   },
-  "C_Cpp_Runner.cCompilerPath": "gcc",
-  "C_Cpp_Runner.cppCompilerPath": "g++",
-  "C_Cpp_Runner.debuggerPath": "gdb",
-  "C_Cpp_Runner.cStandard": "c11",
-  "C_Cpp_Runner.cppStandard": "c++20"
+  "yaml.schemaStore.enable": false,
+  // 若你之前误把 base.json 绑定到所有 YAML（"*"），请移除或改成只匹配真正需要的文件
+  "yaml.schemas": {
+    // 这里保持为空或仅保留你确实需要校验的 YAML 文件映射
+  },
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}/build",
+    "--query-driver=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\g++.exe"
+  ]
 }
