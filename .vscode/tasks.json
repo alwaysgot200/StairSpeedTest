@@ -23,17 +23,17 @@
         //"-DCMAKE_VERBOSE_MAKEFILE=ON",
         "-DCMAKE_C_FLAGS=-fdiagnostics-color=always",
         "-DCMAKE_CXX_FLAGS=-fdiagnostics-color=always",
-        "-DCMAKE_COLOR_DIAGNOSTICS=ON"
+        "-DCMAKE_COLOR_DIAGNOSTICS=ON",
+        "-DCMAKE_SH=CMAKE_SH-NOTFOUND"
       ],
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {
-          "PATH": "${env:MSYS2_ROOT}\\cmakeproxy;${env:MSYS2_ROOT}\\mingw64\\bin;${env:MSYS2_ROOT}\\usr\\bin;${env:MSYS2_ROOT}\\bin;${env:PATH}",
-          // 让终端和工具链认可 ANSI 颜色
+          // 这里从 Configure 阶段去掉 usr\\bin，避免 CMake 发现 sh.exe 后默认切到 MSYS Makefiles
+          "PATH": "${env:MSYS2_ROOT}\\cmakeproxy;${env:MSYS2_ROOT}\\mingw64\\bin;${env:MSYS2_ROOT}\\bin;${env:PATH}",
           "TERM": "xterm-256color",
           "CLICOLOR": "1",
           "CLICOLOR_FORCE": "1",
-          // 自定义 GCC 颜色方案（可按喜好调整）
           "GCC_COLORS": "error=01;31:warning=01;35:note=01;36:locus=00;34:caret=01;32:quote=01"
         }
       },

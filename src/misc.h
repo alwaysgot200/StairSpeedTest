@@ -27,7 +27,12 @@
 #define DO_CONCAT(a,b) CONCAT(a,b)
 template <typename T> class __defer_struct final {private: T fn; bool __cancelled = false; public: explicit __defer_struct(T func) : fn(std::move(func)) {} ~__defer_struct() {if(!__cancelled) fn();} void cancel() {__cancelled = true;} };
 //#define defer(x) std::unique_ptr<void> DO_CONCAT(__defer_deleter_,__LINE__) (nullptr, [&](...){x});
-#define defer(x) __defer_struct DO_CONCAT(__defer_deleter,__LINE__) ([&](...){x;});
+// 为了兼容极老的编译器，提供一个回退；大多数现代编译器都支持 __COUNTER__
+#ifndef __COUNTER__
+#define __COUNTER__ __LINE__
+#endif
+
+#define defer(x) __defer_struct DO_CONCAT(__defer_deleter,__COUNTER__) ([&](...){x;});
 
 #define GETBIT(x,n) (((int)x < 1) ? 0 : ((x >> (n - 1)) & 1))
 #define SETBIT(x,n,v) x ^= (-v ^ x) & (1UL << (n - 1))

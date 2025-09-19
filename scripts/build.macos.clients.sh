@@ -55,7 +55,7 @@ cc -Xlinker -unexported_symbol -Xlinker "*" ss_local*.o .libs/libshadowsocks-lib
 mv ssr-local ../../base/tools/clients
 cd ../..
 
-curl -LO https://github.com/v2fly/v2ray-core/releases/latest/download/v2ray-macos-64.zip
+curl -LO https://github.com/v2fly/v2ray-core/releases/download/v4.45.2/v2ray-macos-64.zip
 unzip v2ray*.zip v2ray v2ctl
 mv v2ray v2ctl base/tools/clients/
 

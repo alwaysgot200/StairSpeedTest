@@ -32,7 +32,7 @@
           "value": "${env:MSYS2_ROOT}/cmakeproxy;${env:MSYS2_ROOT}/mingw64/bin;${env:MSYS2_ROOT}/usr/bin;${env:MSYS2_ROOT}/bin;${env:PATH}"
         }
       ],
-      "externalConsole": true,
+      "externalConsole": false,
       "preLaunchTask": "Rebuild (Debug)",
       "stopAtEntry": false,
       "setupCommands": [
@@ -40,12 +40,13 @@
           "description": "Enable pretty-printing for gdb",
           "text": "-enable-pretty-printing",
           "ignoreFailures": true
-        }
+        },
+        { "text": "catch throw" } // 抛出 C++ 异常时中断
       ],
       "logging": {
-        "engineLogging": true,
-        "trace": true,
-        "traceResponse": true
+        "engineLogging": false,
+        "trace": false,
+        "traceResponse": false
       }
     }
   ]

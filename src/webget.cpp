@@ -18,11 +18,17 @@
 
 extern bool print_debug_info, serve_cache_on_fetch_fail;
 extern int global_log_level;
+// 新增：来自 main.cpp 的全局 GET 限制（字节）
+extern long http_get_max_size_bytes;
 
 typedef std::lock_guard<std::mutex> guarded_mutex;
 std::mutex cache_rw_lock;
 
 std::string user_agent_str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36";
+// 为进度回调传递下载限制（字节），thread_local 确保多线程安全且生命周期覆盖 perform 调用
+static thread_local double g_progress_limit = 0.0;
+// 新增：本次传输是否因为大小限制被中断
+static thread_local bool g_limit_triggered = false;
 
 static inline void curl_init()
 {
@@ -54,8 +60,12 @@ static int dummy_writer(char *data, size_t size, size_t nmemb, void *writerData)
 
 static int size_checker(void *clientp, double dltotal, double dlnow, double ultotal, double ulnow)
 {
-    if(dltotal > 1048576.0)
+    // 默认用配置的限制作为兜底（而不是 1MB 魔法数）
+    double limit = clientp ? *static_cast<double*>(clientp) : static_cast<double>(http_get_max_size_bytes);
+    if(dltotal > limit) {
+        g_limit_triggered = true;
         return 1;
+    }
     return 0;
 }
 
@@ -71,9 +81,21 @@ static inline void curl_set_common_options(CURL *curl_handle, const char *url, l
     curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0L);
     curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 15L);
     curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, user_agent_str.data());
-    if(max_file_size)
+    curl_easy_setopt(curl_handle, CURLOPT_ACCEPT_ENCODING, "");
+
+    if(max_file_size > 0)
+    {
+        g_limit_triggered = false; // 新增：每次开始请求前重置
         curl_easy_setopt(curl_handle, CURLOPT_MAXFILESIZE, max_file_size);
-    curl_easy_setopt(curl_handle, CURLOPT_PROGRESSFUNCTION, size_checker);
+        g_progress_limit = static_cast<double>(max_file_size);
+        curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl_handle, CURLOPT_PROGRESSFUNCTION, size_checker);
+        curl_easy_setopt(curl_handle, CURLOPT_PROGRESSDATA, &g_progress_limit);
+    }
+    else
+    {
+        curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);
+    }
 }
 
 //static std::string curlGet(const std::string &url, const std::string &proxy, std::string &response_headers, CURLcode &return_code, const string_map &request_headers)
@@ -98,7 +120,8 @@ static int curlGet(const FetchArgument argument, FetchResult &result)
         else
             curl_easy_setopt(curl_handle, CURLOPT_PROXY, argument.proxy.data());
     }
-    curl_set_common_options(curl_handle, new_url.data());
+    // 为 GET 设置 5MB 大小限制
+    curl_set_common_options(curl_handle, new_url.data(), http_get_max_size_bytes);
 
     if(argument.request_headers)
     {
@@ -130,7 +153,8 @@ static int curlGet(const FetchArgument argument, FetchResult &result)
     while(true)
     {
         *result.status_code = curl_easy_perform(curl_handle);
-        if(*result.status_code == CURLE_OK || max_fails >= fail_count)
+        // 修复：只在成功或达到最大失败次数时退出循环
+        if(*result.status_code == CURLE_OK || fail_count >= max_fails)
             break;
         else
             fail_count++;
@@ -147,6 +171,14 @@ static int curlGet(const FetchArgument argument, FetchResult &result)
     }
 
     return *result.status_code;
+}
+
+// 新增：供外部判断本次 webGet 是否因大小限制而被中断，以及限制值
+bool webGetWasLimited() {
+    return g_limit_triggered;
+}
+long webGetLimitBytes() {
+    return static_cast<long>(g_progress_limit);
 }
 
 // data:[<mediatype>][;base64],<data>

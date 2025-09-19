@@ -299,10 +299,14 @@ int connectSocks5(SOCKET sHost, std::string username, std::string password)
     PUT_BYTE(ptr++, 2); //user pass auth
     Send(sHost, buf, ptr - buf, 0);
     ZeroMemory(bufRecv, BUF_SIZE);
-    Recv(sHost, bufRecv, 2, 0);
-    if ((bufRecv[0] != 5) ||                       // ver5 response
-            ((unsigned char)buf[1] == 0xFF))  	// check auth method
-    {
+    // 原来是 Recv(sHost, bufRecv, 2, 0); 无校验，这里确保完整读到 2 字节
+    int need = 2, got = 0;
+    while (got < need) {
+        int r = Recv(sHost, bufRecv + got, need - got, 0);
+        if (r <= 0) break;
+        got += r;
+    }
+    if (got != 2 || (bufRecv[0] != 5) || ((unsigned char)bufRecv[1] == 0xFF)) {
         std::cerr << "socks5: connect not accepted" << std::endl;
         return -1;
     }

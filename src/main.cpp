@@ -58,6 +58,9 @@ std::string def_test_file =
     "20E90413-712F-438C-988E-FDAA79A8AC3D/dotnetfx35.exe";
 std::string def_upload_target =
     "http://losangeles.speed.googlefiber.net:3004/upload?time=0";
+int http_get_max_size_mb = 5;
+long http_get_max_size_bytes = 5L * 1024 * 1024;
+std::string site_ping_url = "https://www.google.com/";
 std::vector<downloadLink> downloadFiles;
 std::vector<linkMatchRule> matchRules;
 string_array custom_exclude_remarks, custom_include_remarks, dict, trans;
@@ -178,6 +181,13 @@ void clientCheck() {
     avail_status[SPEEDTEST_MESSAGE_FOUNDVMESS] = 0;
     writeLog(LOG_TYPE_WARN, "V2Ray core not found at path " + v2core_path);
   }
+  if (fileExist(v2core_path)) {
+    avail_status[SPEEDTEST_MESSAGE_FOUNDVLESS] = 1;
+    writeLog(LOG_TYPE_INFO, "Found V2Ray core at path " + v2core_path);
+  } else {
+    avail_status[SPEEDTEST_MESSAGE_FOUNDVLESS] = 0;
+    writeLog(LOG_TYPE_WARN, "V2Ray core not found at path " + v2core_path);
+  }
   if (fileExist(ss_libev_path)) {
     avail_status[SPEEDTEST_MESSAGE_FOUNDSS] = 1;
     writeLog(LOG_TYPE_INFO, "Found Shadowsocks-libev at path " + ss_libev_path);
@@ -206,6 +216,7 @@ void clientCheck() {
 
 int runClient(int client) {
 #ifdef _WIN32
+  // std::string v2core_path = "tools\\clients\\v2ray.exe run -c config.json";
   std::string v2core_path = "tools\\clients\\v2ray.exe -config config.json";
   std::string ssr_libev_path =
       "tools\\clients\\ssr-local.exe -u -c config.json";
@@ -223,6 +234,10 @@ int runClient(int client) {
 
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
+    writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    runProgram(v2core_path, "", false);
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDVLESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
     runProgram(v2core_path, "", false);
     break;
@@ -252,7 +267,8 @@ int runClient(int client) {
     break;
   }
 #else
-  std::string v2core_path = "tools/clients/v2ray -config config.json";
+  // std::string v2core_path = "tools/clients/v2ray run -c config.json";
+  std::string v2core_path = "tools/clients/v2ray  -config config.json";
   std::string ssr_libev_path = "tools/clients/ssr-local -u -c config.json";
   std::string trojan_path = "tools/clients/trojan -c config.json";
 
@@ -261,6 +277,10 @@ int runClient(int client) {
 
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
+    writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    runProgram(v2core_path, "", false);
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDVLESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
     runProgram(v2core_path, "", false);
     break;
@@ -281,6 +301,33 @@ int runClient(int client) {
   return 0;
 }
 
+static bool waitUntilSocksReady(const std::string &addr, int port,
+                                const std::string &username,
+                                const std::string &password,
+                                int timeout_ms = 8000) {
+  using namespace std::chrono;
+  auto deadline = steady_clock::now() + milliseconds(timeout_ms);
+
+  while (steady_clock::now() < deadline) {
+    SOCKET s = initSocket(getNetworkType(addr), SOCK_STREAM, IPPROTO_TCP);
+    if (s != INVALID_SOCKET) {
+      if (startConnect(s, addr, port) != SOCKET_ERROR) {
+        setTimeout(s, 1000);
+        // Try a full SOCKS5 method negotiation; success indicates inbound is
+        // ready
+        if (connectSocks5(s, username, password) == 0) {
+          closesocket(s);
+          return true;
+        }
+      }
+      closesocket(s);
+    }
+    // wait a bit before retry to avoid busy loop
+    sleep(200);
+  }
+  return false;
+}
+
 int killClient(int client) {
 #ifdef _WIN32
   std::string v2core_name = "v2ray.exe";
@@ -292,6 +339,10 @@ int killClient(int client) {
 
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
+    writeLog(LOG_TYPE_INFO, "Killing v2ray core...");
+    killProgram(v2core_name);
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDVLESS:
     writeLog(LOG_TYPE_INFO, "Killing v2ray core...");
     killProgram(v2core_name);
     break;
@@ -326,6 +377,10 @@ int killClient(int client) {
 
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
+    writeLog(LOG_TYPE_INFO, "Killing v2ray core...");
+    killProgram(v2core_name);
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDVLESS:
     writeLog(LOG_TYPE_INFO, "Killing v2ray core...");
     killProgram(v2core_name);
     break;
@@ -392,6 +447,14 @@ void readConf(std::string path) {
   ini.GetIfExist("override_conf_port", override_conf_port);
   ini.GetIntIfExist("thread_count", def_thread_count);
   ini.GetBoolIfExist("pause_on_done", pause_on_done);
+  // read GET limit (MB) and convert to bytes; and custom site ping URL
+  ini.GetIntIfExist("http_get_max_size_mb", http_get_max_size_mb);
+  if (http_get_max_size_mb <= 0)
+    http_get_max_size_mb = 5;
+  http_get_max_size_bytes = 1LL * http_get_max_size_mb * 1024 * 1024;
+  ini.GetIfExist("site_ping_url", site_ping_url);
+  if (site_ping_url.empty())
+    site_ping_url = "https://www.google.com/";
 
   ini.EnterSection("export");
   ini.GetBoolIfExist("export_with_maxspeed", export_with_maxspeed);
@@ -472,6 +535,7 @@ void signalHandler(int signum) {
   killClient(SPEEDTEST_MESSAGE_FOUNDSS);
   killClient(SPEEDTEST_MESSAGE_FOUNDSSR);
   killClient(SPEEDTEST_MESSAGE_FOUNDVMESS);
+  killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
   killClient(SPEEDTEST_MESSAGE_FOUNDTROJAN);
 #endif // __APPLE__
   killByHandle();
@@ -553,7 +617,7 @@ std::string removeEmoji(const std::string &orig_remark) {
     return orig_remark;
   return remark;
 }
-
+// test one node
 int singleTest(nodeInfo &node) {
   node.remarks = trim(removeEmoji(node.remarks)); // remove all emojis
   int retVal = 0;
@@ -599,9 +663,19 @@ int singleTest(nodeInfo &node) {
     testserver = socksaddr;
     testport = socksport;
     writeLog(LOG_TYPE_INFO, "Writing config file...");
-    fileWrite("config.json", node.proxyStr, true);
+    fileWrite("config.json", node.proxyStr,
+              true); // make the right config file for client
     if (node.linkType != -1 && avail_status[node.linkType] == 1)
-      runClient(node.linkType);
+      runClient(node.linkType); // startup the client like v2ray/ss/ssr/trojan
+                                // to perform the test.
+
+    // Wait until local SOCKS5 inbound is ready (up to 8 seconds)
+    if (!waitUntilSocksReady(testserver, testport, username, password, 8000)) {
+      writeLog(LOG_TYPE_WARN,
+               "SOCKS inbound seems not ready at " + testserver + ":" +
+                   std::to_string(testport) +
+                   " after waiting. Will continue and may fail.");
+    }
   }
 #ifdef __APPLE__
   defer(killClient(node.linkType);)
@@ -667,14 +741,14 @@ int singleTest(nodeInfo &node) {
     if (test_nat_type)
       printMsg(SPEEDTEST_MESSAGE_GOTNAT, rpcmode, id, node.natType.get());
   }
-
+  // ping a real website with proxy engine
   if (test_site_ping) {
     printMsg(SPEEDTEST_MESSAGE_STARTGPING, rpcmode, id);
     writeLog(LOG_TYPE_INFO, "Now performing site ping...");
     // websitePing(node, "https://www.google.com/", testserver, testport,
     // username, password);
     sitePing(node, testserver, testport, username, password,
-             "http://www.google.com");
+             site_ping_url);
     logdata = std::accumulate(
         std::next(std::begin(node.rawSitePing)), std::end(node.rawSitePing),
         std::to_string(node.rawSitePing[0]), [](std::string a, int b) {
@@ -684,7 +758,7 @@ int singleTest(nodeInfo &node) {
     writeLog(LOG_TYPE_INFO, "Site ping: " + node.sitePing);
     printMsg(SPEEDTEST_MESSAGE_GOTGPING, rpcmode, id, node.sitePing);
   }
-
+  // test to download the data from remote site
   printMsg(SPEEDTEST_MESSAGE_STARTSPEED, rpcmode, id);
   // node.total_recv_bytes = 1;
   if (speedtest_mode != "pingonly") {
@@ -717,6 +791,7 @@ int singleTest(nodeInfo &node) {
       }
     }
   }
+  // test upload speed by local proxy
   printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed,
            node.maxSpeed);
   if (test_upload) {
@@ -733,7 +808,7 @@ int singleTest(nodeInfo &node) {
   sleep(300);
   return SPEEDTEST_ERROR_NONE;
 }
-
+// test the nodes now
 void batchTest(std::vector<nodeInfo> &nodes) {
   nodeInfo node;
   unsigned int onlines = 0;
@@ -812,6 +887,8 @@ void addNodes(std::string link, bool multilink) {
   writeLog(LOG_TYPE_INFO, "Received Link.");
   if (startsWith(link, "vmess://") || startsWith(link, "vmess1://"))
     linkType = SPEEDTEST_MESSAGE_FOUNDVMESS;
+  else if (startsWith(link, "vless://"))
+    linkType = SPEEDTEST_MESSAGE_FOUNDVLESS;
   else if (startsWith(link, "ss://"))
     linkType = SPEEDTEST_MESSAGE_FOUNDSS;
   else if (startsWith(link, "ssr://"))
@@ -849,15 +926,22 @@ void addNodes(std::string link, bool multilink) {
       link = UrlDecode(getUrlArg(link, "url"));
     strSub = webGet(link);
     if (strSub.size() == 0) {
-      // try to get it again with system proxy
-      writeLog(LOG_TYPE_WARN,
-               "Cannot download subscription directly. Using system proxy.");
-      strProxy = getSystemProxy();
-      if (strProxy.size()) {
-        printMsg(SPEEDTEST_ERROR_SUBFETCHERR, rpcmode);
-        strSub = webGet(link, strProxy);
-      } else
-        writeLog(LOG_TYPE_WARN, "No system proxy is set. Skipping.");
+      if (webGetWasLimited()) {
+        writeLog(LOG_TYPE_WARN, "Subscription size exceeded limit (" +
+                                std::to_string(http_get_max_size_mb) + " MB).");
+        printMsg(SPEEDTEST_MESSAGE_SUBTOOLARGE, rpcmode,
+                 std::to_string(http_get_max_size_mb));
+      } else {
+        // try to get it again with system proxy
+        writeLog(LOG_TYPE_WARN,
+                 "Cannot download subscription directly. Using system proxy.");
+        strProxy = getSystemProxy();
+        if (strProxy.size()) {
+          printMsg(SPEEDTEST_ERROR_SUBFETCHERR, rpcmode);
+          strSub = webGet(link, strProxy);
+        } else
+          writeLog(LOG_TYPE_WARN, "No system proxy is set. Skipping.");
+      }
     }
     if (strSub.size()) {
       writeLog(LOG_TYPE_INFO, "Parsing subscription data...");
@@ -1004,6 +1088,7 @@ int main(int argc, char *argv[]) {
   killClient(SPEEDTEST_MESSAGE_FOUNDSS);
   killClient(SPEEDTEST_MESSAGE_FOUNDSSR);
   killClient(SPEEDTEST_MESSAGE_FOUNDVMESS);
+  killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
   killClient(SPEEDTEST_MESSAGE_FOUNDTROJAN);
 #endif // __APPLE__
   clientCheck();

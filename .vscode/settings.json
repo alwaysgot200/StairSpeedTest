@@ -3,6 +3,9 @@
     "CMAKE_C_COMPILER": "D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\gcc.exe",
     "CMAKE_CXX_COMPILER": "D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\g++.exe"
   },
+  "cmake.generator": "MinGW Makefiles",
+  // 可选：若你不想 VSCode 自动在打开工程时触发 Configure，可显式关闭
+  // "cmake.configureOnOpen": false,
   "cmake.options.advanced": {
     "build": {
       "statusBarVisibility": "inherit",
@@ -25,5 +28,11 @@
   "clangd.arguments": [
     "--compile-commands-dir=${workspaceFolder}/build",
     "--query-driver=D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\g++.exe"
+  ],
+  "logViewer.watch": [
+    {
+      "title": "Demo App",
+      "pattern": "E:/_cpp_work/StairSpeedTest/build/bin/logs/*.log"
+    }
   ]
 }

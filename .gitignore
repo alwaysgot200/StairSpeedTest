@@ -155,3 +155,4 @@ venv/
 *.zip
 *.7z
 *.rar
+res/sample.txt
