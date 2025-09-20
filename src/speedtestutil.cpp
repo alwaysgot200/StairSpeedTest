@@ -2,6 +2,11 @@
 #include <cmath>
 #include <fstream>
 #include <time.h>
+#include <thread>
+#include <atomic>
+#include <future>
+#include <mutex>
+#include <utility>
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
@@ -18,6 +23,10 @@
 
 using namespace rapidjson;
 using namespace YAML;
+
+// Optional runtime config for parsing parallelism (provided by other TU)
+extern int parse_parallel_threshold; // <=0 means use default 512
+extern int parse_worker_count;       // <=0 means use default (2*HW or 8)
 
 string_array ss_ciphers = {"rc4-md5",
                            "aes-128-gcm",
@@ -3121,8 +3130,7 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
 
   // try to parse as normal subscription
   if (!processed) {
-    // 仅在“看起来像
-    // Base64”且原文不含协议头的情况下尝试解码，并对解码结果做协议/格式校验
+    // 仅在“看起来像 Base64”且原文不含协议头的情况下尝试解码，并对解码结果做协议/格式校验
     std::string t = trim(sub);
     bool contains_scheme =
         regFind(t, "(?i)(ssr|vmess|vmess1|vless|ss|trojan|socks|http)://");
@@ -3130,8 +3138,8 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
 
     if (!contains_scheme && looks_b64_chars) {
       std::string decoded = urlsafe_base64_decode(t);
-      bool decoded_contains_scheme = regFind(
-          decoded, "(?i)(ssr|vmess|vmess1|vless|ss|trojan|socks|http)://");
+      bool decoded_contains_scheme =
+          regFind(decoded, "(?i)(ssr|vmess|vmess1|vless|ss|trojan|socks|http)://");
       bool decoded_is_surge_style =
           regFind(decoded, "(vmess|vless|shadowsocks|http|trojan)\\s*?=");
       if (decoded_contains_scheme || decoded_is_surge_style) {
@@ -3142,38 +3150,140 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
     } else {
       sub = t; // 已有协议头或字符集不符，直接视为非 Base64
     }
+
     if (regFind(sub, "(vmess|vless|shadowsocks|http|trojan)\\s*?=")) {
       if (explodeSurge(sub, custom_port, nodes, sslibev))
         return;
     }
-    // 使用固定的 '\n' 作为分隔符；不再用空格拆分，避免误切含空格的链接
-    strstream.clear();
-    strstream.str(std::string());
-    strstream << sub;
-    while (std::getline(strstream, strLink, '\n')) {
-      // 仅当行尾是 '\r' 时去掉
-      if (!strLink.empty() && strLink.back() == '\r')
-        strLink.pop_back();
 
-      node.linkType = -1;
-      try {
-        explode(strLink, sslibev, ssrlibev, custom_port, node);
-      } catch (const std::exception &e) {
-        writeLog(LOG_TYPE_ERROR, std::string("explode() exception: ") +
-                                     e.what() +
-                                     " while parsing link: " + strLink);
-        continue;
-      } catch (...) {
-        writeLog(LOG_TYPE_ERROR,
-                 "explode() unknown exception while parsing link: " + strLink);
-        continue;
+    // 将订阅内容按行拆分
+    std::vector<std::string> lines;
+    lines.reserve(sub.size() / 48 + 8); // 粗略预估，减少realloc
+    {
+      std::string cur;
+      cur.reserve(256);
+      for (char ch : sub) {
+        if (ch == '\n') {
+          if (!cur.empty() && cur.back() == '\r')
+            cur.pop_back();
+          lines.emplace_back(std::move(cur));
+          cur.clear();
+          cur.reserve(256);
+        } else {
+          cur.push_back(ch);
+        }
       }
+      if (!cur.empty()) {
+        if (!cur.empty() && cur.back() == '\r')
+          cur.pop_back();
+        lines.emplace_back(std::move(cur));
+      }
+    }
 
-      if (strLink.size() == 0 || node.linkType == -1) {
-        continue;
+    // 大订阅并行解析，小订阅保持顺序解析
+    const int threshold_cfg = (parse_parallel_threshold > 0) ? parse_parallel_threshold : 512;
+    if (lines.size() >= static_cast<size_t>(threshold_cfg)) {
+      const unsigned int hw = std::thread::hardware_concurrency();
+      int worker_cfg = (parse_worker_count > 0) ? parse_worker_count
+                                                : (hw ? static_cast<int>(hw) * 2 : 8);
+      const size_t worker_count = static_cast<size_t>(std::max(2, worker_cfg));
+      std::atomic<size_t> next_idx{0};
+
+      // 每线程本地缓存，避免对 nodes 的锁竞争
+      std::vector<std::vector<std::pair<int, nodeInfo>>> buckets(worker_count);
+      auto worker = [&](size_t tid) {
+        std::vector<std::pair<int, nodeInfo>> local;
+        local.reserve(256);
+        while (true) {
+          size_t i = next_idx.fetch_add(1, std::memory_order_relaxed);
+          if (i >= lines.size())
+            break;
+          const std::string &strLinkLocal = lines[i];
+          if (strLinkLocal.empty())
+            continue;
+
+          nodeInfo n;
+          n.linkType = -1;
+          try {
+            explode(strLinkLocal, sslibev, ssrlibev, custom_port, n);
+          } catch (const std::exception &e) {
+            writeLog(LOG_TYPE_ERROR, std::string("explode() exception: ") +
+                                         e.what() +
+                                         " while parsing link: " + strLinkLocal);
+            continue;
+          } catch (...) {
+            writeLog(LOG_TYPE_ERROR,
+                     "explode() unknown exception while parsing link: " + strLinkLocal);
+            continue;
+          }
+          if (n.linkType == -1)
+            continue;
+
+          local.emplace_back(static_cast<int>(i), std::move(n));
+        }
+        buckets[tid] = std::move(local);
+      };
+
+      // 启动线程
+      std::vector<std::thread> threads;
+      threads.reserve(worker_count);
+      for (size_t t = 0; t < worker_count; ++t) {
+        threads.emplace_back(worker, t);
       }
-      nodes.emplace_back(std::move(node)); // got the right formed node content
-      node = nodeInfo();
+      for (auto &th : threads)
+        th.join();
+
+      // 合并并按原始行号排序，确保输出顺序稳定
+      size_t total = 0;
+      for (auto &b : buckets)
+        total += b.size();
+      std::vector<std::pair<int, nodeInfo>> merged;
+      merged.reserve(total);
+      for (auto &b : buckets) {
+        if (!b.empty()) {
+          merged.insert(merged.end(),
+                        std::make_move_iterator(b.begin()),
+                        std::make_move_iterator(b.end()));
+        }
+      }
+      std::sort(merged.begin(), merged.end(),
+                [](const auto &a, const auto &b) { return a.first < b.first; });
+
+      // 一次性追加到 nodes
+      nodes.reserve(nodes.size() + merged.size());
+      for (auto &p : merged) {
+        nodes.emplace_back(std::move(p.second));
+      }
+    } else {
+      // 串行解析（小订阅避免线程开销）
+      std::stringstream ss;
+      ss.clear();
+      ss.str(std::string());
+      ss << sub;
+      while (std::getline(ss, strLink, '\n')) {
+        if (!strLink.empty() && strLink.back() == '\r')
+          strLink.pop_back();
+
+        nodeInfo n;
+        n.linkType = -1;
+        try {
+          explode(strLink, sslibev, ssrlibev, custom_port, n);
+        } catch (const std::exception &e) {
+          writeLog(LOG_TYPE_ERROR, std::string("explode() exception: ") +
+                                       e.what() +
+                                       " while parsing link: " + strLink);
+          continue;
+        } catch (...) {
+          writeLog(LOG_TYPE_ERROR,
+                   "explode() unknown exception while parsing link: " + strLink);
+          continue;
+        }
+
+        if (strLink.size() == 0 || n.linkType == -1) {
+          continue;
+        }
+        nodes.emplace_back(std::move(n)); // got the right formed node content
+      }
     }
   }
 }
@@ -3182,33 +3292,14 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
                  string_array &include_remarks, int groupID) {
   int node_index = 0;
   std::vector<nodeInfo>::iterator iter = nodes.begin();
-  /*
-  while(iter != nodes.end())
-  {
-      if(chkIgnore(*iter, exclude_remarks, include_remarks))
-      {
-          writeLog(LOG_TYPE_INFO, "Node  " + iter->group + " - " + iter->remarks
-  + "  has been ignored and will not be added."); nodes.erase(iter);
-      }
-      else
-      {
-          writeLog(LOG_TYPE_INFO, "Node  " + iter->group + " - " + iter->remarks
-  + "  has been added."); iter->id = node_index; iter->groupID = groupID;
-          ++node_index;
-          ++iter;
-      }
-  }
-  */
 
   std::vector<std::unique_ptr<pcre2_code, decltype(&pcre2_code_free)>>
       exclude_patterns, include_patterns;
-  std::vector<
-      std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>>
-      exclude_match_data, include_match_data;
   unsigned int i = 0;
   PCRE2_SIZE erroroffset;
   int errornumber, rc;
 
+  // Compile exclude patterns
   for (i = 0; i < exclude_remarks.size(); i++) {
     std::unique_ptr<pcre2_code, decltype(&pcre2_code_free)> pattern(
         pcre2_compile(
@@ -3220,13 +3311,9 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
     if (!pattern)
       return;
     exclude_patterns.emplace_back(std::move(pattern));
-    pcre2_jit_compile(exclude_patterns[i].get(), 0);
-    std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>
-        match_data(pcre2_match_data_create_from_pattern(
-                       exclude_patterns[i].get(), NULL),
-                   &pcre2_match_data_free);
-    exclude_match_data.emplace_back(std::move(match_data));
+    pcre2_jit_compile(exclude_patterns.back().get(), 0);
   }
+  // Compile include patterns
   for (i = 0; i < include_remarks.size(); i++) {
     std::unique_ptr<pcre2_code, decltype(&pcre2_code_free)> pattern(
         pcre2_compile(
@@ -3238,62 +3325,158 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
     if (!pattern)
       return;
     include_patterns.emplace_back(std::move(pattern));
-    pcre2_jit_compile(include_patterns[i].get(), 0);
-    std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>
-        match_data(pcre2_match_data_create_from_pattern(
-                       include_patterns[i].get(), NULL),
-                   &pcre2_match_data_free);
-    include_match_data.emplace_back(std::move(match_data));
+    pcre2_jit_compile(include_patterns.back().get(), 0);
   }
+
   writeLog(LOG_TYPE_INFO, "Filter started.");
-  while (iter != nodes.end()) {
-    bool excluded = false, included = false;
-    for (i = 0; i < exclude_patterns.size(); i++) {
-      rc = pcre2_match(
-          exclude_patterns[i].get(),
-          reinterpret_cast<const unsigned char *>(iter->remarks.c_str()),
-          iter->remarks.size(), 0, 0, exclude_match_data[i].get(), NULL);
-      if (rc < 0) {
-        switch (rc) {
-        case PCRE2_ERROR_NOMATCH:
-          break;
-        default:
-          return;
-        }
-      } else
-        excluded = true;
-    }
-    if (include_patterns.size() > 0)
-      for (i = 0; i < include_patterns.size(); i++) {
-        rc = pcre2_match(
-            include_patterns[i].get(),
-            reinterpret_cast<const unsigned char *>(iter->remarks.c_str()),
-            iter->remarks.size(), 0, 0, include_match_data[i].get(), NULL);
-        if (rc < 0) {
-          switch (rc) {
-          case PCRE2_ERROR_NOMATCH:
-            break;
-          default:
-            return;
-          }
-        } else
-          included = true;
+
+  // Parallel filtering for large lists
+  const size_t parallel_threshold = 512;
+  if (nodes.size() >= parallel_threshold) {
+    const unsigned int hw = std::thread::hardware_concurrency();
+    const size_t worker_count = std::max<size_t>(2, hw ? hw * 2 : 8);
+    std::atomic<size_t> next_idx{0};
+
+    // Result bitmap: 1 = keep, 0 = drop
+    std::vector<char> keep(nodes.size(), 0);
+
+    auto worker = [&](size_t /*tid*/) {
+      // Prepare thread-local match_data for each pattern
+      std::vector<std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>> ex_md, in_md;
+      ex_md.reserve(exclude_patterns.size());
+      in_md.reserve(include_patterns.size());
+      for (auto &pc : exclude_patterns) {
+        ex_md.emplace_back(
+            std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>(
+                pcre2_match_data_create_from_pattern(pc.get(), NULL), &pcre2_match_data_free));
       }
-    else
-      included = true;
-    if (excluded || !included) {
-      writeLog(LOG_TYPE_INFO, "Node  " + iter->group + " - " + iter->remarks +
-                                  "  has been ignored and will not be added.");
-      nodes.erase(iter);
-    } else {
-      writeLog(LOG_TYPE_INFO, "Node  " + iter->group + " - " + iter->remarks +
-                                  "  has been added.");
-      iter->id = node_index;
-      iter->groupID = groupID;
-      ++node_index;
-      ++iter;
+      for (auto &pc : include_patterns) {
+        in_md.emplace_back(
+            std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>(
+                pcre2_match_data_create_from_pattern(pc.get(), NULL), &pcre2_match_data_free));
+      }
+
+      while (true) {
+        size_t idx = next_idx.fetch_add(1, std::memory_order_relaxed);
+        if (idx >= nodes.size())
+          break;
+        const std::string &remarks = nodes[idx].remarks;
+
+        bool excluded = false;
+        bool included = include_patterns.empty();
+        int rc_local = 0;
+
+        // Exclude matching
+        for (size_t j = 0; j < exclude_patterns.size(); ++j) {
+          rc_local = pcre2_match(exclude_patterns[j].get(),
+                                 reinterpret_cast<const unsigned char *>(remarks.c_str()),
+                                 remarks.size(), 0, 0, ex_md[j].get(), NULL);
+          if (rc_local >= 0) {
+            excluded = true;
+            break;
+          }
+        }
+
+        // Include matching (if any include patterns provided)
+        if (!excluded && !included) {
+          for (size_t j = 0; j < include_patterns.size(); ++j) {
+            rc_local = pcre2_match(include_patterns[j].get(),
+                                   reinterpret_cast<const unsigned char *>(remarks.c_str()),
+                                   remarks.size(), 0, 0, in_md[j].get(), NULL);
+            if (rc_local >= 0) {
+              included = true;
+              break;
+            }
+          }
+        }
+
+        keep[idx] = (!excluded && included) ? 1 : 0;
+      }
+    };
+
+    // Launch workers
+    std::vector<std::thread> threads;
+    threads.reserve(worker_count);
+    for (size_t t = 0; t < worker_count; ++t) {
+      threads.emplace_back(worker, t);
+    }
+    for (auto &th : threads)
+      th.join();
+
+    // Merge and log
+    std::vector<nodeInfo> filtered;
+    filtered.reserve(nodes.size());
+    node_index = 0;
+    for (size_t idx = 0; idx < nodes.size(); ++idx) {
+      if (keep[idx]) {
+        writeLog(LOG_TYPE_INFO, "Node  " + nodes[idx].group + " - " + nodes[idx].remarks +
+                                    "  has been added.");
+        nodes[idx].id = node_index;
+        nodes[idx].groupID = groupID;
+        ++node_index;
+        filtered.emplace_back(std::move(nodes[idx]));
+      } else {
+        writeLog(LOG_TYPE_INFO, "Node  " + nodes[idx].group + " - " + nodes[idx].remarks +
+                                    "  has been ignored and will not be added.");
+      }
+    }
+    nodes.swap(filtered);
+  } else {
+    // Sequential path for small lists
+    while (iter != nodes.end()) {
+      bool excluded = false, included = false;
+
+      // Exclude patterns
+      for (i = 0; i < exclude_patterns.size(); i++) {
+        std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)> md(
+            pcre2_match_data_create_from_pattern(exclude_patterns[i].get(), NULL),
+            &pcre2_match_data_free);
+        rc = pcre2_match(
+            exclude_patterns[i].get(),
+            reinterpret_cast<const unsigned char *>(iter->remarks.c_str()),
+            iter->remarks.size(), 0, 0, md.get(), NULL);
+        if (rc >= 0) {
+          excluded = true;
+          break;
+        }
+      }
+
+      // Include patterns (if provided)
+      if (!excluded) {
+        if (include_patterns.size() > 0) {
+          for (i = 0; i < include_patterns.size(); i++) {
+            std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)> md(
+                pcre2_match_data_create_from_pattern(include_patterns[i].get(), NULL),
+                &pcre2_match_data_free);
+            rc = pcre2_match(
+                include_patterns[i].get(),
+                reinterpret_cast<const unsigned char *>(iter->remarks.c_str()),
+                iter->remarks.size(), 0, 0, md.get(), NULL);
+            if (rc >= 0) {
+              included = true;
+              break;
+            }
+          }
+        } else {
+          included = true;
+        }
+      }
+
+      if (excluded || !included) {
+        writeLog(LOG_TYPE_INFO, "Node  " + iter->group + " - " + iter->remarks +
+                                    "  has been ignored and will not be added.");
+        iter = nodes.erase(iter);
+      } else {
+        writeLog(LOG_TYPE_INFO, "Node  " + iter->group + " - " + iter->remarks +
+                                    "  has been added.");
+        iter->id = node_index;
+        iter->groupID = groupID;
+        ++node_index;
+        ++iter;
+      }
     }
   }
+
   writeLog(LOG_TYPE_INFO, "Filter done.");
 }
 

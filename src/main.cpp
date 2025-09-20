@@ -88,6 +88,8 @@ int curGroupID = 0;
 
 int global_log_level = LOG_LEVEL_ERROR;
 bool serve_cache_on_fetch_fail = false, print_debug_info = false;
+int parse_worker_count = 0;
+int parse_parallel_threshold = 512;
 
 // declarations
 
@@ -105,6 +107,15 @@ get_nat_type_thru_socks5(const std::string &server, uint16_t port,
                          const std::string &password = "",
                          const std::string &stun_server = "stun.l.google.com",
                          uint16_t stun_port = 19302);
+
+static inline int to_int(const char* s) {
+  if (!s) return 0;
+  try {
+    return std::stoi(std::string(s));
+  } catch (...) {
+    return 0;
+  }
+}
 
 // original codes
 
@@ -450,6 +461,10 @@ void readConf(std::string path) {
   if (site_ping_url.empty())
     site_ping_url = "https://www.google.com/";
 
+  ini.EnterSection("parse");
+  ini.GetIntIfExist("parallel_threshold", parse_parallel_threshold);
+  ini.GetIntIfExist("worker_count", parse_worker_count);
+
   ini.EnterSection("export");
   ini.GetBoolIfExist("export_with_maxspeed", export_with_maxspeed);
   ini.GetIfExist("export_sort_method", export_sort_method);
@@ -551,6 +566,10 @@ void chkArg(int argc, char *argv[]) {
       sub_url.assign(argv[++i]);
     else if (!strcmp(argv[i], "/g") && argc > i + 1)
       custom_group.assign(argv[++i]);
+    else if ((!strcmp(argv[i], "/parse-threads") || !strcmp(argv[i], "--parse-threads")) && argc > i + 1)
+      parse_worker_count = to_int(argv[++i]);
+    else if ((!strcmp(argv[i], "/parse-threshold") || !strcmp(argv[i], "--parse-threshold")) && argc > i + 1)
+      parse_parallel_threshold = to_int(argv[++i]);
   }
 }
 
