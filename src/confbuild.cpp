@@ -163,14 +163,32 @@ std::string vmessConstruct(const std::string &group, const std::string &remarks,
   case "http"_hash: {
     std::string h2set = h2set_vmess;
     h2set = replace_first(h2set, "?path?", path);
-    string_array hosts = split(host, ",");
-    h2set =
-        replace_first(h2set, "?host?",
-                      std::accumulate(std::next(hosts.begin()), hosts.end(),
-                                      std::string("\"" + hosts[0] + "\""),
-                                      [](auto before, auto current) {
-                                        return before + ",\"" + current + "\"";
-                                      }));
+
+    // 兼容 host 为空：若 add 非 IP 且 host 为空，则用 add；否则允许为空（输出 []）
+    std::string effectiveHost = trim(host);
+    if (effectiveHost.empty() && !isIPv4(add) && !isIPv6(add)) {
+      effectiveHost = add;
+    }
+
+    std::string hostList;
+    if (effectiveHost.empty()) {
+      // 空列表 -> "host":[]
+      hostList = "";
+    } else {
+      // 支持逗号分隔的多个 host
+      auto hostItems = split(effectiveHost, ",");
+      if (hostItems.empty()) {
+        hostList = "";
+      } else {
+        hostList = std::accumulate(std::next(hostItems.begin()), hostItems.end(),
+                                   std::string("\"") + hostItems[0] + "\"",
+                                   [](auto before, auto current) {
+                                     return before + ",\"" + current + "\"";
+                                   });
+      }
+    }
+
+    h2set = replace_first(h2set, "?host?", hostList);
     base = replace_first(base, "?h2set?", h2set);
     break;
   }

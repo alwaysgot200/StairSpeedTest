@@ -128,8 +128,24 @@ void explodeVmess(std::string vmess, const std::string &custom_port,
   node.remarks = ps;
   node.server = add;
   node.port = to_int(port, 1);
-  node.proxyStr = vmessConstruct(node.group, ps, add, port, type, id, aid, net,
-                                 "auto", path, host, "", tls);
+  try {
+    node.proxyStr = vmessConstruct(node.group, ps, add, port, type, id, aid,
+                                   net, "auto", path, host, "", tls);
+  } catch (const std::exception &e) {
+    writeLog(LOG_TYPE_ERROR, std::string("vmessConstruct() exception: ") +
+                                 e.what() +
+                                 " while building vmess for: " + add);
+    node.linkType = -1; // mark invalid, caller will skip this node
+    return;
+  } catch (...) {
+    writeLog(
+        LOG_TYPE_ERROR,
+        std::string(
+            "vmessConstruct() unknown exception while building vmess for: ") +
+            add);
+    node.linkType = -1;
+    return;
+  }
 }
 
 void explodeVmessConf(std::string content, const std::string &custom_port,
@@ -3143,9 +3159,9 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
       try {
         explode(strLink, sslibev, ssrlibev, custom_port, node);
       } catch (const std::exception &e) {
-        writeLog(LOG_TYPE_ERROR,
-                 std::string("explode() exception: ") + e.what() +
-                     " while parsing link: " + strLink);
+        writeLog(LOG_TYPE_ERROR, std::string("explode() exception: ") +
+                                     e.what() +
+                                     " while parsing link: " + strLink);
         continue;
       } catch (...) {
         writeLog(LOG_TYPE_ERROR,

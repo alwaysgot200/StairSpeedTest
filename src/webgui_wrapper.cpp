@@ -28,6 +28,7 @@ extern std::vector<color> custom_color_groups;
 extern std::vector<int> custom_color_bounds;
 extern string_array custom_exclude_remarks, custom_include_remarks;
 extern unsigned int node_count;
+extern int http_timeout_seconds; // 新增
 
 // functions from main
 void addNodes(std::string link, bool multilink);
@@ -50,7 +51,7 @@ nodeInfo find_node(std::string &group, std::string &remarks,
   return nodeInfo();
 }
 
-void ssrspeed_regenerate_node_list(rapidjson::Document &json) {
+void stairspeed_regenerate_node_list(rapidjson::Document &json) {
   nodeInfo node;
   std::string group, remarks, server;
   int server_port;
@@ -74,7 +75,7 @@ void ssrspeed_regenerate_node_list(rapidjson::Document &json) {
   rewriteNodeID(targetNodes);
 }
 
-double ssrspeed_get_speed_number(const std::string &speed) {
+double stairspeed_get_speed_number(const std::string &speed) {
   if (speed == "N/A")
     return 0;
 
@@ -155,12 +156,12 @@ void json_write_node(rapidjson::Writer<rapidjson::StringBuffer> &writer,
   writer.EndObject();
   writer.EndObject();
   writer.Key("dspeed");
-  writer.Double(ssrspeed_get_speed_number(node.avgSpeed));
+  writer.Double(stairspeed_get_speed_number(node.avgSpeed));
   writer.Key("trafficUsed");
   writer.Int(node.totalRecvBytes);
 }
 
-std::string ssrspeed_generate_results(std::vector<nodeInfo> &nodes) {
+std::string stairspeed_generate_results(std::vector<nodeInfo> &nodes) {
   rapidjson::StringBuffer sb;
   rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
   nodeInfo *node = nullptr;
@@ -201,7 +202,7 @@ std::string ssrspeed_generate_results(std::vector<nodeInfo> &nodes) {
   return sb.GetString();
 }
 
-std::string ssrspeed_generate_web_configs(std::vector<nodeInfo> &nodes) {
+std::string stairspeed_generate_web_configs(std::vector<nodeInfo> &nodes) {
   rapidjson::StringBuffer sb;
   rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
   writer.StartArray();
@@ -246,7 +247,7 @@ std::string ssrspeed_generate_web_configs(std::vector<nodeInfo> &nodes) {
   return sb.GetString();
 }
 
-std::string ssrspeed_generate_color() {
+std::string stairspeed_generate_color() {
   rapidjson::StringBuffer sb;
   rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
   writer.StartArray();
@@ -277,9 +278,10 @@ std::string ssrspeed_generate_color() {
   return sb.GetString();
 }
 
-void ssrspeed_webserver_routine(const std::string &listen_address,
-                                int listen_port) {
-  listener_args args = {listen_address, listen_port, 10, 4};
+void stairspeed_webserver_routine(const std::string &listen_address,
+                                  int listen_port) {
+  listener_args args = {listen_address, listen_port, 10, 4,
+                        http_timeout_seconds};
   extern bool gServeFile;
   extern std::string gServeFileRoot;
   gServeFile = true;
@@ -308,7 +310,7 @@ void ssrspeed_webserver_routine(const std::string &listen_address,
 
   append_response("GET", "/getcolors", "text/plain",
                   [](RESPONSE_CALLBACK_ARGS) -> std::string {
-                    return ssrspeed_generate_color();
+                    return stairspeed_generate_color();
                   });
 
   append_response("POST", "/readsubscriptions", "text/plain;charset=utf-8",
@@ -321,7 +323,7 @@ void ssrspeed_webserver_routine(const std::string &listen_address,
                     suburl = GetMember(json, "url");
                     eraseElements(allNodes);
                     addNodes(suburl, false);
-                    return ssrspeed_generate_web_configs(allNodes);
+                    return stairspeed_generate_web_configs(allNodes);
                   });
 
   append_response("POST", "/readfileconfig", "text/plain",
@@ -337,51 +339,59 @@ void ssrspeed_webserver_routine(const std::string &listen_address,
                           SPEEDTEST_ERROR_UNRECOGFILE)
                         return "error";
                       else
-                        return ssrspeed_generate_web_configs(allNodes);
+                        return stairspeed_generate_web_configs(allNodes);
                     }
                   });
 
-  append_response("POST", "/start", "text/plain",
-                  [](RESPONSE_CALLBACK_ARGS) -> std::string {
-                    if (start_flag)
-                      return "running";
-                    time_t cur_time = time(NULL);
-                    if (cur_time - done_time < 5)
-                      return "done";
-                    std::thread t([=]() {
-                      start_flag = true;
-                      rapidjson::Document json;
-                      json.Parse(request.postdata.data());
-                      std::string test_mode = GetMember(json, "testMode"),
-                                  sort_method = GetMember(json, "sortMethod"),
-                                  group = GetMember(json, "group"),
-                                  exp_color = GetMember(json, "colors");
+  append_response(
+      "POST", "/start", "text/plain",
+      [](RESPONSE_CALLBACK_ARGS) -> std::string {
+        if (start_flag)
+          return "running";
+        time_t cur_time = time(NULL);
+        if (cur_time - done_time < 5)
+          return "done";
 
-                      if (test_mode == "ALL")
-                        speedtest_mode = "all";
-                      else if (test_mode == "TCP_PING")
-                        speedtest_mode = "pingonly";
-                      std::transform(sort_method.begin(), sort_method.end(),
-                                     sort_method.begin(), ::tolower);
-                      export_sort_method =
-                          replace_all_distinct(sort_method, "reverse_", "r");
-                      custom_group = group;
-                      if (exp_color.size())
-                        export_color_style = exp_color;
+        // 关键修复：在启动分离线程前把需要的数据拷贝出来，避免在线程中访问已销毁的
+        // request
+        auto postdata_copy = request.postdata;
 
-                      ssrspeed_regenerate_node_list(json);
-                      batchTest(targetNodes);
-                      done_time = time(NULL);
-                      start_flag = false;
-                    });
-                    t.detach();
-                    response.status_code = 202;
-                    return "running";
-                  });
+        std::thread t([postdata = std::move(postdata_copy)]() mutable {
+          start_flag = true;
+          rapidjson::Document json;
+          // 在线程中仅使用 postdata 副本，不要再访问 request
+          json.Parse(postdata.data());
+          std::string test_mode = GetMember(json, "testMode"),
+                      sort_method = GetMember(json, "sortMethod"),
+                      group = GetMember(json, "group"),
+                      exp_color = GetMember(json, "colors");
+
+          if (test_mode == "ALL")
+            speedtest_mode = "all";
+          else if (test_mode == "TCP_PING")
+            speedtest_mode = "pingonly";
+          std::transform(sort_method.begin(), sort_method.end(),
+                         sort_method.begin(), ::tolower);
+          export_sort_method =
+              replace_all_distinct(sort_method, "reverse_", "r");
+          custom_group = group;
+          if (exp_color.size())
+            export_color_style = exp_color;
+
+          stairspeed_regenerate_node_list(json);
+          batchTest(targetNodes);
+          done_time = time(NULL);
+          start_flag = false;
+        });
+        t.detach();
+
+        response.status_code = 202;
+        return "running";
+      });
 
   append_response("GET", "/getresults", "text/plain;charset=utf-8",
                   [](RESPONSE_CALLBACK_ARGS) -> std::string {
-                    return ssrspeed_generate_results(targetNodes);
+                    return stairspeed_generate_results(targetNodes);
                   });
 
   std::cerr << "Stair Speedtest " VERSION " Web server running @ http://"

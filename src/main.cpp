@@ -50,6 +50,7 @@ std::string pngpath;
 bool webserver_mode = false;
 std::string listen_address = "127.0.0.1";
 int listen_port = 10870, cur_node_id = -1;
+int http_timeout_seconds = 30; // 新增：默认 30 秒
 
 bool ss_libev = true;
 bool ssr_libev = true;
@@ -96,8 +97,8 @@ void getTestFile(nodeInfo &node, const std::string &proxy,
                  const std::vector<downloadLink> &downloadFiles,
                  const std::vector<linkMatchRule> &matchRules,
                  const std::string &defaultTestFile);
-void ssrspeed_webserver_routine(const std::string &listen_address,
-                                int listen_port);
+void stairspeed_webserver_routine(const std::string &listen_address,
+                                  int listen_port);
 std::string
 get_nat_type_thru_socks5(const std::string &server, uint16_t port,
                          const std::string &username = "",
@@ -214,7 +215,7 @@ void clientCheck() {
   }
 }
 
-int runClient(int client) {
+bool runClient(int client) {
 #ifdef _WIN32
   // std::string v2core_path = "tools\\clients\\v2ray.exe run -c config.json";
   std::string v2core_path = "tools\\clients\\v2ray.exe -config config.json";
@@ -235,36 +236,33 @@ int runClient(int client) {
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
-    runProgram(v2core_path, "", false);
-    break;
+    return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDVLESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
-    runProgram(v2core_path, "", false);
-    break;
+    return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDSSR:
     if (ssr_libev) {
       writeLog(LOG_TYPE_INFO, "Starting up shadowsocksr-libev...");
-      runProgram(ssr_libev_path, "", false);
+      return runProgram(ssr_libev_path, "", false);
     } else {
       writeLog(LOG_TYPE_INFO, "Starting up shadowsocksr-win...");
       fileCopy("config.json", ssr_win_dir + "gui-config.json");
-      runProgram(ssr_win_path, "", false);
+      return runProgram(ssr_win_path, "", false);
     }
-    break;
   case SPEEDTEST_MESSAGE_FOUNDSS:
     if (ss_libev) {
       writeLog(LOG_TYPE_INFO, "Starting up shadowsocks-libev...");
-      runProgram(ss_libev_path, ss_libev_dir, false);
+      return runProgram(ss_libev_path, ss_libev_dir, false);
     } else {
       writeLog(LOG_TYPE_INFO, "Starting up shadowsocks-win...");
       fileCopy("config.json", ss_win_dir + "gui-config.json");
-      runProgram(ss_win_path, ss_win_dir, false);
+      return runProgram(ss_win_path, ss_win_dir, false);
     }
-    break;
   case SPEEDTEST_MESSAGE_FOUNDTROJAN:
     writeLog(LOG_TYPE_INFO, "Starting up trojan...");
-    runProgram(trojan_path, "", false);
-    break;
+    return runProgram(trojan_path, "", false);
+  default:
+    return false;
   }
 #else
   // std::string v2core_path = "tools/clients/v2ray run -c config.json";
@@ -278,27 +276,23 @@ int runClient(int client) {
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
-    runProgram(v2core_path, "", false);
-    break;
+    return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDVLESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
-    runProgram(v2core_path, "", false);
-    break;
+    return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDSSR:
     writeLog(LOG_TYPE_INFO, "Starting up shadowsocksr-libev...");
-    runProgram(ssr_libev_path, "", false);
-    break;
+    return runProgram(ssr_libev_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDSS:
     writeLog(LOG_TYPE_INFO, "Starting up shadowsocks-libev...");
-    runProgram(ss_libev_path, ss_libev_dir, false);
-    break;
+    return runProgram(ss_libev_path, ss_libev_dir, false);
   case SPEEDTEST_MESSAGE_FOUNDTROJAN:
     writeLog(LOG_TYPE_INFO, "Starting up trojan...");
-    runProgram(trojan_path, "", false);
-    break;
+    return runProgram(trojan_path, "", false);
+  default:
+    return false;
   }
 #endif // _WIN32
-  return 0;
 }
 
 static bool waitUntilSocksReady(const std::string &addr, int port,
@@ -486,7 +480,7 @@ void readConf(std::string path) {
       }
     }
   }
-  ini.GetBoolIfExist("export_as_ssrspeed", export_as_ssrspeed);
+  ini.GetBoolIfExist("export_as_stairspeed", export_as_stairspeed);
 
   ini.EnterSection("rules");
   if (ini.ItemPrefixExist("test_file_urls")) {
@@ -526,6 +520,8 @@ void readConf(std::string path) {
   ini.GetBoolIfExist("webserver_mode", webserver_mode);
   ini.GetIfExist("listen_address", listen_address);
   ini.GetIntIfExist("listen_port", listen_port);
+  ini.GetIntIfExist("http_timeout_seconds",
+                    http_timeout_seconds); // 新增：从配置读取
 }
 
 void signalHandler(int signum) {
@@ -584,7 +580,32 @@ void saveResult(std::vector<nodeInfo> &nodes) {
   ini.Set("Tester", "Stair Speedtest Reborn " VERSION);
   ini.Set("GenerationTime", getTime(3));
 
+  // Only write valid nodes according to rules
   for (nodeInfo &x : nodes) {
+    bool valid = false;
+
+    if (test_site_ping) {
+      // Site ping enabled: require at least one successful site ping sample
+      for (int v : x.rawSitePing) {
+        if (v > 0) {
+          valid = true;
+          break;
+        }
+      }
+    } else {
+      // Site ping disabled
+      if (speedtest_mode == "pingonly") {
+        // No real download verification performed: skip all
+        valid = false;
+      } else {
+        // Download speed test performed: require actual data received
+        valid = (x.totalRecvBytes > 0);
+      }
+    }
+
+    if (!valid)
+      continue;
+
     ini.SetCurrentSection(x.group + "^" + x.remarks);
     ini.Set("AvgPing", x.avgPing);
     ini.Set("PkLoss", x.pkLoss);
@@ -665,12 +686,19 @@ int singleTest(nodeInfo &node) {
     writeLog(LOG_TYPE_INFO, "Writing config file...");
     fileWrite("config.json", node.proxyStr,
               true); // make the right config file for client
-    if (node.linkType != -1 && avail_status[node.linkType] == 1)
-      runClient(node.linkType); // startup the client like v2ray/ss/ssr/trojan
-                                // to perform the test.
+    if (node.linkType != -1 && avail_status[node.linkType] == 1) {
+      bool ok = runClient(node.linkType); // startup client
+      if (!ok) {
+        writeLog(LOG_TYPE_ERROR, "Client startup failed. Please check "
+                                 "config.json and client binary.");
+        // 提示一条通用错误信息，随后终止该节点的测试
+        printMsg(SPEEDTEST_ERROR_UNDEFINED, rpcmode);
+        return SPEEDTEST_ERROR_UNDEFINED;
+      }
+    }
 
-    // Wait until local SOCKS5 inbound is ready (up to 8 seconds)
-    if (!waitUntilSocksReady(testserver, testport, username, password, 8000)) {
+    // Wait until local SOCKS5 inbound is ready (up to 1 seconds)
+    if (!waitUntilSocksReady(testserver, testport, username, password, 1000)) {
       writeLog(LOG_TYPE_WARN,
                "SOCKS inbound seems not ready at " + testserver + ":" +
                    std::to_string(testport) +
@@ -702,6 +730,7 @@ int singleTest(nodeInfo &node) {
     }));
   }
 
+  // Here begin TCP ping
   printMsg(SPEEDTEST_MESSAGE_STARTPING, rpcmode, id);
   if (speedtest_mode != "speedonly") {
     writeLog(LOG_TYPE_INFO, "Now performing TCP ping...");
@@ -747,8 +776,7 @@ int singleTest(nodeInfo &node) {
     writeLog(LOG_TYPE_INFO, "Now performing site ping...");
     // websitePing(node, "https://www.google.com/", testserver, testport,
     // username, password);
-    sitePing(node, testserver, testport, username, password,
-             site_ping_url);
+    sitePing(node, testserver, testport, username, password, site_ping_url);
     logdata = std::accumulate(
         std::next(std::begin(node.rawSitePing)), std::end(node.rawSitePing),
         std::to_string(node.rawSitePing[0]), [](std::string a, int b) {
@@ -928,7 +956,8 @@ void addNodes(std::string link, bool multilink) {
     if (strSub.size() == 0) {
       if (webGetWasLimited()) {
         writeLog(LOG_TYPE_WARN, "Subscription size exceeded limit (" +
-                                std::to_string(http_get_max_size_mb) + " MB).");
+                                    std::to_string(http_get_max_size_mb) +
+                                    " MB).");
         printMsg(SPEEDTEST_MESSAGE_SUBTOOLARGE, rpcmode,
                  std::to_string(http_get_max_size_mb));
       } else {
@@ -1097,7 +1126,7 @@ int main(int argc, char *argv[]) {
   writeLog(LOG_TYPE_INFO, "Init completed.");
   // intro message
   if (webserver_mode) {
-    ssrspeed_webserver_routine(listen_address, listen_port);
+    stairspeed_webserver_routine(listen_address, listen_port);
     return 0;
   }
   printMsg(SPEEDTEST_MESSAGE_WELCOME, rpcmode);

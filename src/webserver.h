@@ -30,6 +30,7 @@ struct listener_args
     int port;
     int max_conn;
     int max_workers;
+    int http_timeout_seconds; // 新增：HTTP 请求超时时间（秒）
 };
 
 void append_response(const std::string &method, const std::string &uri, const std::string &content_type, response_callback response);

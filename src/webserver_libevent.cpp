@@ -277,7 +277,7 @@ int start_web_server(void *argv)
 
     evhttp_set_allowed_methods(Server.get(), EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_OPTIONS | EVHTTP_REQ_PUT | EVHTTP_REQ_PATCH | EVHTTP_REQ_DELETE);
     evhttp_set_gencb(Server.get(), OnReq, nullptr);
-    evhttp_set_timeout(Server.get(), 30);
+    evhttp_set_timeout(Server.get(), reinterpret_cast<listener_args*>(argv)->http_timeout_seconds);
     if (event_dispatch() == -1)
     {
         //std::cerr << "Failed to run message loop." << std::endl;
@@ -360,7 +360,7 @@ int start_web_server_multi(void *argv)
 
         evhttp_set_allowed_methods(httpd, EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_OPTIONS);
         evhttp_set_gencb(httpd, OnReq, nullptr);
-        evhttp_set_timeout(httpd, 30);
+        evhttp_set_timeout(httpd, reinterpret_cast<listener_args*>(argv)->http_timeout_seconds);
         if (pthread_create(&ths[i], NULL, httpserver_dispatch, base[i]) != 0)
             return -1;
     }
