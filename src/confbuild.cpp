@@ -46,44 +46,50 @@ std::string quicset_vless =
     R"({"security":"?host?","key":"?path?","header":{"type":"?type?"}})";
 
 int explodeLog(const std::string &log, std::vector<nodeInfo> &nodes) {
-  INIReader ini;
-  std::vector<std::string> nodeList, vArray;
-  std::string strTemp;
-  nodeInfo node;
-  if (!startsWith(log, "[Basic]"))
-    return -1;
-  ini.Parse(log);
+    INIReader ini;
+    std::vector<std::string> nodeList, vArray;
+    std::string strTemp;
+    nodeInfo node;
 
-  if (!ini.SectionExist("Basic") || !ini.ItemExist("Basic", "GenerationTime") ||
-      !ini.ItemExist("Basic", "Tester"))
-    return -1;
+    // 空串防护：来自外部输入时，空输入直接返回错误
+    if (log.empty())
+        return -1;
 
-  nodeList = ini.GetSections();
-  node.proxyStr = "LOG";
-  for (auto &x : nodeList) {
-    if (x == "Basic")
-      continue;
-    ini.EnterSection(x);
-    vArray = split(x, "^");
-    node.group = vArray[0];
-    node.remarks = vArray[1];
-    node.avgPing = ini.Get("AvgPing");
-    node.avgSpeed = ini.Get("AvgSpeed");
-    node.groupID = ini.GetNumber<int>("GroupID");
-    node.id = ini.GetNumber<int>("ID");
-    node.maxSpeed = ini.Get("MaxSpeed");
-    node.online = ini.GetBool("Online");
-    node.pkLoss = ini.Get("PkLoss");
-    ini.GetNumberArray<int>("RawPing", ",", node.rawPing);
-    ini.GetNumberArray<int>("RawSitePing", ",", node.rawSitePing);
-    ini.GetNumberArray<unsigned long long>("RawSpeed", ",", node.rawSpeed);
-    node.sitePing = ini.Get("SitePing");
-    node.totalRecvBytes = ini.GetNumber<unsigned long long>("UsedTraffic");
-    node.ulSpeed = ini.Get("ULSpeed");
-    nodes.push_back(node);
-  }
+    if (!startsWith(log, "[Basic]"))
+        return -1;
 
-  return 0;
+    ini.Parse(log);
+
+    if (!ini.SectionExist("Basic") || !ini.ItemExist("Basic", "GenerationTime") ||
+        !ini.ItemExist("Basic", "Tester"))
+        return -1;
+
+    nodeList = ini.GetSections();
+    node.proxyStr = "LOG";
+    for (auto &x : nodeList) {
+        if (x == "Basic")
+            continue;
+        ini.EnterSection(x);
+        vArray = split(x, "^");
+        node.group = vArray[0];
+        node.remarks = vArray[1];
+        node.avgPing = ini.Get("AvgPing");
+        node.avgSpeed = ini.Get("AvgSpeed");
+        node.groupID = ini.GetNumber<int>("GroupID");
+        node.id = ini.GetNumber<int>("ID");
+        node.maxSpeed = ini.Get("MaxSpeed");
+        node.online = ini.GetBool("Online");
+        node.pkLoss = ini.Get("PkLoss");
+        ini.GetNumberArray<int>("RawPing", ",", node.rawPing);
+        ini.GetNumberArray<int>("RawSitePing", ",", node.rawSitePing);
+        ini.GetNumberArray<unsigned long long>("RawSpeed", ",", node.rawSpeed);
+        node.sitePing = ini.Get("SitePing");
+        node.totalRecvBytes = ini.GetNumber<unsigned long long>("UsedTraffic");
+        node.ulSpeed = ini.Get("ULSpeed");
+        nodes.push_back(node);
+    }
+
+    return 0;
 }
 
 std::string replace_first(std::string str, const std::string &old_value,

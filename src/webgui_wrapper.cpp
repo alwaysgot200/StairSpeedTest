@@ -317,9 +317,14 @@ void stairspeed_webserver_routine(const std::string &listen_address,
                   [](RESPONSE_CALLBACK_ARGS) -> std::string {
                     if (start_flag)
                       return "running";
+
+                    // 空串防护
+                    if (request.postdata.empty())
+                      return "error";
+
                     rapidjson::Document json;
                     std::string suburl;
-                    json.Parse(request.postdata.data());
+                    json.Parse(request.postdata.c_str());
                     suburl = GetMember(json, "url");
                     eraseElements(allNodes);
                     addNodes(suburl, false);
@@ -329,18 +334,21 @@ void stairspeed_webserver_routine(const std::string &listen_address,
   append_response("POST", "/readfileconfig", "text/plain",
                   [](RESPONSE_CALLBACK_ARGS) -> std::string {
                     eraseElements(allNodes);
-                    // fileWrite("received.txt", getFormData(postdata), true);
                     if (start_flag)
                       return "running";
-                    else {
-                      if (explodeConfContent(getFormData(request.postdata),
-                                             override_conf_port, ss_libev,
-                                             ssr_libev, allNodes) ==
-                          SPEEDTEST_ERROR_UNRECOGFILE)
-                        return "error";
-                      else
-                        return stairspeed_generate_web_configs(allNodes);
-                    }
+
+                    // 空串防护
+                    if (request.postdata.empty())
+                      return "error";
+
+                    // fileWrite("received.txt", getFormData(postdata), true);
+                    if (explodeConfContent(getFormData(request.postdata),
+                                           override_conf_port, ss_libev,
+                                           ssr_libev, allNodes) ==
+                        SPEEDTEST_ERROR_UNRECOGFILE)
+                      return "error";
+                    else
+                      return stairspeed_generate_web_configs(allNodes);
                   });
 
   append_response(
@@ -352,15 +360,20 @@ void stairspeed_webserver_routine(const std::string &listen_address,
         if (cur_time - done_time < 5)
           return "done";
 
-        // 关键修复：在启动分离线程前把需要的数据拷贝出来，避免在线程中访问已销毁的
-        // request
+        // 空串防护：不启动线程并返回错误
+        if (request.postdata.empty()) {
+          response.status_code = 400;
+          return "error";
+        }
+
+        // 关键修复：在启动分离线程前把需要的数据拷贝出来，避免在线程中访问已销毁的 request
         auto postdata_copy = request.postdata;
 
         std::thread t([postdata = std::move(postdata_copy)]() mutable {
           start_flag = true;
           rapidjson::Document json;
-          // 在线程中仅使用 postdata 副本，不要再访问 request
-          json.Parse(postdata.data());
+          // 在线程中仅使用 postdata 副本
+          json.Parse(postdata.c_str());
           std::string test_mode = GetMember(json, "testMode"),
                       sort_method = GetMember(json, "sortMethod"),
                       group = GetMember(json, "group"),

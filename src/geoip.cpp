@@ -49,7 +49,7 @@ geoIPInfo getGeoIPInfo(const std::string &ip, const std::string &proxy)
 
     writeLog(LOG_TYPE_GEOIP, "Fetched GeoIP data: " + strRet);
     writeLog(LOG_TYPE_GEOIP, "Parsing GeoIP result.");
-    json.Parse(strRet.data());
+    json.Parse(strRet.c_str());
     if(json.HasParseError())
     {
         writeLog(LOG_TYPE_GEOIP, "Parse GeoIP result error. Leaving.");

@@ -1,11 +1,11 @@
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <fstream>
-#include <time.h>
-#include <thread>
-#include <atomic>
 #include <future>
 #include <mutex>
+#include <thread>
+#include <time.h>
 #include <utility>
 
 #define PCRE2_CODE_UNIT_WIDTH 8
@@ -77,27 +77,37 @@ std::string modSSMD5 = "f7653207090ce3389115e9c88541afe0";
 // output the constructed vmess config file data
 void explodeVmess(std::string vmess, const std::string &custom_port,
                   nodeInfo &node) {
+  // 空串防护
+  if (vmess.empty())
+    return;
+
+  // 大小写不敏感前缀校验
+  if (!regFind(vmess, "(?i)^(vmess|vmess1)://"))
+    return;
+
   std::string version, ps, add, port, type, id, aid, net, path, host, tls;
   Document jsondata;
   std::vector<std::string> vArray;
-  if (regMatch(vmess, "vmess://(.*?)@(.*)")) {
+  if (regMatch(vmess, "(?i)vmess://(.*?)@(.*)")) {
     explodeStdVMess(vmess, custom_port, node);
     return;
-  } else if (regMatch(vmess, "vmess://(.*?)\\?(.*)")) // shadowrocket style link
+  } else if (regMatch(vmess,
+                      "(?i)vmess://(.*?)\\?(.*)")) // shadowrocket style link
   {
     explodeShadowrocket(vmess, custom_port, node);
     return;
-  } else if (regMatch(vmess, "vmess1://(.*?)\\?(.*)")) // kitsunebi style link
+  } else if (regMatch(vmess,
+                      "(?i)vmess1://(.*?)\\?(.*)")) // kitsunebi style link
   {
     explodeKitsunebi(vmess, custom_port, node);
     return;
   }
-  vmess = urlsafe_base64_decode(regReplace(vmess, "(vmess|vmess1)://", ""));
+  vmess = urlsafe_base64_decode(regReplace(vmess, "(?i)(vmess|vmess1)://", ""));
   if (regMatch(vmess, "(.*?) = (.*)")) {
     explodeQuan(vmess, custom_port, node);
     return;
   }
-  jsondata.Parse(vmess.data());
+  jsondata.Parse(vmess.c_str());
   if (jsondata.HasParseError())
     return;
 
@@ -170,11 +180,14 @@ void explodeVmessConf(std::string content, const std::string &custom_port,
   std::map<std::string, std::string>::iterator iter;
   std::string streamset = "streamSettings", tcpset = "tcpSettings",
               wsset = "wsSettings";
+  // 空串防护
+  if (content.empty())
+    return;
   regGetMatch(content, "((?i)streamsettings)", 2, 0, &streamset);
   regGetMatch(content, "((?i)tcpsettings)", 2, 0, &tcpset);
-  regGetMatch(content, "((?1)wssettings)", 2, 0, &wsset);
+  regGetMatch(content, "((?i)wssettings)", 2, 0, &wsset);
 
-  json.Parse(content.data());
+  json.Parse(content.c_str());
   if (json.HasParseError())
     return;
   try {
@@ -332,20 +345,29 @@ void explodeVless(std::string vless, const std::string &custom_port,
   std::string version, ps, add, port, type, id, aid, net, path, host, tls;
   Document jsondata;
   std::vector<std::string> vArray;
-  if (regMatch(vless, "vless://(.*?)@(.*)")) {
+  // 空串防护
+  if (vless.empty())
+    return;
+
+  // Ensure scheme is vless:// (大小写不敏感)
+  if (!regFind(vless, "(?i)^vless://"))
+    return;
+
+  if (regMatch(vless, "(?i)vless://(.*?)@(.*)")) {
     explodeStdVLess(vless, custom_port, node);
     return;
-  } else if (regMatch(vless, "vless://(.*?)\\?(.*)")) // shadowrocket style link
+  } else if (regMatch(vless,
+                      "(?i)vless://(.*?)\\?(.*)")) // shadowrocket style link
   {
     explodeShadowrocket(vless, custom_port, node);
     return;
   }
-  vless = urlsafe_base64_decode(regReplace(vless, "(vless)://", ""));
+  vless = urlsafe_base64_decode(regReplace(vless, "(?i)(vless)://", ""));
   if (regMatch(vless, "(.*?) = (.*)")) {
     explodeQuan(vless, custom_port, node);
     return;
   }
-  jsondata.Parse(vless.data());
+  jsondata.Parse(vless.c_str());
   if (jsondata.HasParseError())
     return;
 
@@ -391,6 +413,10 @@ void explodeVless(std::string vless, const std::string &custom_port,
 
 void explodeVlessConf(std::string content, const std::string &custom_port,
                       bool libev, std::vector<nodeInfo> &nodes) {
+  // 空串防护
+  if (content.empty())
+    return;
+
   nodeInfo node;
   Document json;
   rapidjson::Value nodejson, settings;
@@ -404,12 +430,12 @@ void explodeVlessConf(std::string content, const std::string &custom_port,
               wsset = "wsSettings";
   regGetMatch(content, "((?i)streamsettings)", 2, 0, &streamset);
   regGetMatch(content, "((?i)tcpsettings)", 2, 0, &tcpset);
-  regGetMatch(content, "((?1)wssettings)", 2, 0, &wsset);
+  regGetMatch(content, "((?i)wssettings)", 2, 0, &wsset);
 
   // 可选字段：alpn/fp/flow/pbk/sid
   std::string alpn, fp, flow, pbk, sid;
 
-  json.Parse(content.data());
+  json.Parse(content.c_str());
   if (json.HasParseError())
     return;
 
@@ -808,6 +834,10 @@ void explodeSS(std::string ss, bool libev, const std::string &custom_port,
 
 void explodeSSD(std::string link, bool libev, const std::string &custom_port,
                 std::vector<nodeInfo> &nodes) {
+  // 空串防护
+  if (link.empty())
+    return;
+
   Document jsondata;
   nodeInfo node;
   unsigned int index = nodes.size(), listType = 0, listCount = 0;
@@ -890,6 +920,10 @@ void explodeSSD(std::string link, bool libev, const std::string &custom_port,
 void explodeSSAndroid(std::string ss, bool libev,
                       const std::string &custom_port,
                       std::vector<nodeInfo> &nodes) {
+  // 空串防护
+  if (ss.empty())
+    return;
+
   std::string ps, password, method, server, port, group = SS_DEFAULT_GROUP;
   std::string plugin, pluginopts;
 
@@ -898,7 +932,7 @@ void explodeSSAndroid(std::string ss, bool libev,
   int index = nodes.size();
   // first add some extra data before parsing
   ss = "{\"nodes\":" + ss + "}";
-  json.Parse(ss.data());
+  json.Parse(ss.c_str());
   if (json.HasParseError())
     return;
 
@@ -934,13 +968,17 @@ void explodeSSAndroid(std::string ss, bool libev,
 
 void explodeSSConf(std::string content, const std::string &custom_port,
                    bool libev, std::vector<nodeInfo> &nodes) {
+  // 空串防护
+  if (content.empty())
+    return;
+
   nodeInfo node;
   Document json;
   std::string ps, password, method, server, port, plugin, pluginopts,
       group = SS_DEFAULT_GROUP;
   int index = nodes.size();
 
-  json.Parse(content.data());
+  json.Parse(content.c_str());
   if (json.HasParseError())
     return;
   const char *section = json.HasMember("version") &&
@@ -1038,13 +1076,17 @@ void explodeSSR(std::string ssr, bool ss_libev, bool ssr_libev,
 void explodeSSRConf(std::string content, const std::string &custom_port,
                     bool ss_libev, bool ssr_libev,
                     std::vector<nodeInfo> &nodes) {
+  // 空串防护
+  if (content.empty())
+    return;
+
   nodeInfo node;
   Document json;
   std::string remarks, remarks_base64, group, server, port, method, password,
       protocol, protoparam, obfs, obfsparam, plugin, pluginopts;
   int index = nodes.size();
 
-  json.Parse(content.data());
+  json.Parse(content.c_str());
   if (json.HasParseError())
     return;
 
@@ -1357,14 +1399,25 @@ void explodeQuan(const std::string &quan, const std::string &custom_port,
 
 void explodeNetch(std::string netch, bool ss_libev, bool ssr_libev,
                   const std::string &custom_port, nodeInfo &node) {
+  // 空串防护
+  if (netch.empty())
+    return;
+
   Document json;
   std::string type, group, remark, address, port, username, password, method,
       plugin, pluginopts, protocol, protoparam, obfs, obfsparam, id, aid,
       transprot, faketype, host, edge, path, tls;
   tribool udp, tfo, scv;
-  netch = urlsafe_base64_decode(netch.substr(8));
 
-  json.Parse(netch.data());
+  // 支持两种输入：
+  // 1) 标准链接形式：Netch://<base64>
+  // 2) 仅含 base64 负载：<base64>
+  if (startsWith(netch, "Netch://"))
+    netch = urlsafe_base64_decode(netch.substr(8));
+  else
+    netch = urlsafe_base64_decode(netch);
+
+  json.Parse(netch.c_str());
   if (json.HasParseError())
     return;
   type = GetMember(json, "Type");
@@ -2036,6 +2089,10 @@ void explodeKitsunebi(std::string kit, const std::string &custom_port,
 
 bool explodeSurge(std::string surge, const std::string &custom_port,
                   std::vector<nodeInfo> &nodes, bool libev) {
+  // 空串防护
+  if (surge.empty())
+    return false;
+
   std::multimap<std::string, std::string> proxies;
   nodeInfo node;
   unsigned int i, index = nodes.size();
@@ -2865,6 +2922,10 @@ bool explodeSurge(std::string surge, const std::string &custom_port,
 
 void explodeSSTap(std::string sstap, const std::string &custom_port,
                   std::vector<nodeInfo> &nodes, bool ss_libev, bool ssr_libev) {
+  // 空串防护
+  if (sstap.empty())
+    return;
+
   std::string configType, group, remarks, server, port;
   std::string cipher;
   std::string user, pass;
@@ -2872,7 +2933,7 @@ void explodeSSTap(std::string sstap, const std::string &custom_port,
   Document json;
   nodeInfo node;
   unsigned int index = nodes.size();
-  json.Parse(sstap.data());
+  json.Parse(sstap.c_str());
   if (json.HasParseError())
     return;
 
@@ -2934,11 +2995,18 @@ void explodeSSTap(std::string sstap, const std::string &custom_port,
 void explodeNetchConf(std::string netch, bool ss_libev, bool ssr_libev,
                       const std::string &custom_port,
                       std::vector<nodeInfo> &nodes) {
+  // 空串防护
+  if (netch.empty())
+    return;
+
+  // 输入为 Base64 时，先进行解码
+  netch = urlsafe_base64_decode(netch);
+
   Document json;
   nodeInfo node;
   unsigned int index = nodes.size();
 
-  json.Parse(netch.data());
+  json.Parse(netch.c_str());
   if (json.HasParseError())
     return;
 
@@ -3072,23 +3140,24 @@ int explodeConfContent(const std::string &content,
 void explode(const std::string &link, bool sslibev, bool ssrlibev,
              const std::string &custom_port, nodeInfo &node) {
   // TODO: replace strFind with startsWith if appropriate
-  if (strFind(link, "ssr://"))
+  if (regFind(link, "(?i)^ssr://"))
     explodeSSR(link, sslibev, ssrlibev, custom_port, node);
-  else if (strFind(link, "vmess://") || strFind(link, "vmess1://"))
+  else if (regFind(link, "(?i)^(vmess|vmess1)://"))
     explodeVmess(link, custom_port, node);
-  else if (strFind(link, "vless://"))
+  else if (regFind(link, "(?i)^vless://"))
     explodeVless(link, custom_port, node);
-  else if (strFind(link, "ss://"))
+  else if (regFind(link, "(?i)^ss://"))
     explodeSS(link, sslibev, custom_port, node);
-  else if (strFind(link, "socks://") || strFind(link, "https://t.me/socks") ||
-           strFind(link, "tg://socks"))
+  else if (regFind(link, "(?i)^socks://") ||
+           regFind(link, "(?i)^https://t\\.me/socks") ||
+           regFind(link, "(?i)^tg://socks"))
     explodeSocks(link, custom_port, node);
-  else if (strFind(link, "https://t.me/http") ||
-           strFind(link, "tg://http")) // telegram style http link
+  else if (regFind(link, "(?i)^https://t\\.me/http") ||
+           regFind(link, "(?i)^tg://http")) // telegram style http link
     explodeHTTP(link, custom_port, node);
-  else if (strFind(link, "Netch://"))
+  else if (regFind(link, "(?i)^Netch://"))
     explodeNetch(link, sslibev, ssrlibev, custom_port, node);
-  else if (strFind(link, "trojan://"))
+  else if (regFind(link, "(?i)^trojan://"))
     explodeTrojan(link, custom_port, node);
   else if (isLink(link))
     explodeHTTPSub(link, custom_port, node);
@@ -3102,7 +3171,7 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
   nodeInfo node;
 
   // try to parse as SSD configuration
-  if (startsWith(sub, "ssd://")) {
+  if (regFind(sub, "(?i)^ssd://")) {
     explodeSSD(sub, sslibev, custom_port, nodes);
     processed = true;
   }
@@ -3130,7 +3199,8 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
 
   // try to parse as normal subscription
   if (!processed) {
-    // 仅在“看起来像 Base64”且原文不含协议头的情况下尝试解码，并对解码结果做协议/格式校验
+    // 仅在“看起来像
+    // Base64”且原文不含协议头的情况下尝试解码，并对解码结果做协议/格式校验
     std::string t = trim(sub);
     bool contains_scheme =
         regFind(t, "(?i)(ssr|vmess|vmess1|vless|ss|trojan|socks|http)://");
@@ -3138,8 +3208,8 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
 
     if (!contains_scheme && looks_b64_chars) {
       std::string decoded = urlsafe_base64_decode(t);
-      bool decoded_contains_scheme =
-          regFind(decoded, "(?i)(ssr|vmess|vmess1|vless|ss|trojan|socks|http)://");
+      bool decoded_contains_scheme = regFind(
+          decoded, "(?i)(ssr|vmess|vmess1|vless|ss|trojan|socks|http)://");
       bool decoded_is_surge_style =
           regFind(decoded, "(vmess|vless|shadowsocks|http|trojan)\\s*?=");
       if (decoded_contains_scheme || decoded_is_surge_style) {
@@ -3181,11 +3251,13 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
     }
 
     // 大订阅并行解析，小订阅保持顺序解析
-    const int threshold_cfg = (parse_parallel_threshold > 0) ? parse_parallel_threshold : 512;
+    const int threshold_cfg =
+        (parse_parallel_threshold > 0) ? parse_parallel_threshold : 512;
     if (lines.size() >= static_cast<size_t>(threshold_cfg)) {
       const unsigned int hw = std::thread::hardware_concurrency();
-      int worker_cfg = (parse_worker_count > 0) ? parse_worker_count
-                                                : (hw ? static_cast<int>(hw) * 2 : 8);
+      int worker_cfg = (parse_worker_count > 0)
+                           ? parse_worker_count
+                           : (hw ? static_cast<int>(hw) * 2 : 8);
       const size_t worker_count = static_cast<size_t>(std::max(2, worker_cfg));
       std::atomic<size_t> next_idx{0};
 
@@ -3207,13 +3279,14 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
           try {
             explode(strLinkLocal, sslibev, ssrlibev, custom_port, n);
           } catch (const std::exception &e) {
-            writeLog(LOG_TYPE_ERROR, std::string("explode() exception: ") +
-                                         e.what() +
-                                         " while parsing link: " + strLinkLocal);
+            writeLog(LOG_TYPE_ERROR,
+                     std::string("explode() exception: ") + e.what() +
+                         " while parsing link: " + strLinkLocal);
             continue;
           } catch (...) {
             writeLog(LOG_TYPE_ERROR,
-                     "explode() unknown exception while parsing link: " + strLinkLocal);
+                     "explode() unknown exception while parsing link: " +
+                         strLinkLocal);
             continue;
           }
           if (n.linkType == -1)
@@ -3241,8 +3314,7 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
       merged.reserve(total);
       for (auto &b : buckets) {
         if (!b.empty()) {
-          merged.insert(merged.end(),
-                        std::make_move_iterator(b.begin()),
+          merged.insert(merged.end(), std::make_move_iterator(b.begin()),
                         std::make_move_iterator(b.end()));
         }
       }
@@ -3275,7 +3347,8 @@ void explodeSub(std::string sub, bool sslibev, bool ssrlibev,
           continue;
         } catch (...) {
           writeLog(LOG_TYPE_ERROR,
-                   "explode() unknown exception while parsing link: " + strLink);
+                   "explode() unknown exception while parsing link: " +
+                       strLink);
           continue;
         }
 
@@ -3342,18 +3415,22 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
 
     auto worker = [&](size_t /*tid*/) {
       // Prepare thread-local match_data for each pattern
-      std::vector<std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>> ex_md, in_md;
+      std::vector<
+          std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>>
+          ex_md, in_md;
       ex_md.reserve(exclude_patterns.size());
       in_md.reserve(include_patterns.size());
       for (auto &pc : exclude_patterns) {
         ex_md.emplace_back(
             std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>(
-                pcre2_match_data_create_from_pattern(pc.get(), NULL), &pcre2_match_data_free));
+                pcre2_match_data_create_from_pattern(pc.get(), NULL),
+                &pcre2_match_data_free));
       }
       for (auto &pc : include_patterns) {
         in_md.emplace_back(
             std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>(
-                pcre2_match_data_create_from_pattern(pc.get(), NULL), &pcre2_match_data_free));
+                pcre2_match_data_create_from_pattern(pc.get(), NULL),
+                &pcre2_match_data_free));
       }
 
       while (true) {
@@ -3368,9 +3445,10 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
 
         // Exclude matching
         for (size_t j = 0; j < exclude_patterns.size(); ++j) {
-          rc_local = pcre2_match(exclude_patterns[j].get(),
-                                 reinterpret_cast<const unsigned char *>(remarks.c_str()),
-                                 remarks.size(), 0, 0, ex_md[j].get(), NULL);
+          rc_local = pcre2_match(
+              exclude_patterns[j].get(),
+              reinterpret_cast<const unsigned char *>(remarks.c_str()),
+              remarks.size(), 0, 0, ex_md[j].get(), NULL);
           if (rc_local >= 0) {
             excluded = true;
             break;
@@ -3380,9 +3458,10 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
         // Include matching (if any include patterns provided)
         if (!excluded && !included) {
           for (size_t j = 0; j < include_patterns.size(); ++j) {
-            rc_local = pcre2_match(include_patterns[j].get(),
-                                   reinterpret_cast<const unsigned char *>(remarks.c_str()),
-                                   remarks.size(), 0, 0, in_md[j].get(), NULL);
+            rc_local = pcre2_match(
+                include_patterns[j].get(),
+                reinterpret_cast<const unsigned char *>(remarks.c_str()),
+                remarks.size(), 0, 0, in_md[j].get(), NULL);
             if (rc_local >= 0) {
               included = true;
               break;
@@ -3409,15 +3488,16 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
     node_index = 0;
     for (size_t idx = 0; idx < nodes.size(); ++idx) {
       if (keep[idx]) {
-        writeLog(LOG_TYPE_INFO, "Node  " + nodes[idx].group + " - " + nodes[idx].remarks +
-                                    "  has been added.");
+        writeLog(LOG_TYPE_INFO, "Node  " + nodes[idx].group + " - " +
+                                    nodes[idx].remarks + "  has been added.");
         nodes[idx].id = node_index;
         nodes[idx].groupID = groupID;
         ++node_index;
         filtered.emplace_back(std::move(nodes[idx]));
       } else {
-        writeLog(LOG_TYPE_INFO, "Node  " + nodes[idx].group + " - " + nodes[idx].remarks +
-                                    "  has been ignored and will not be added.");
+        writeLog(LOG_TYPE_INFO,
+                 "Node  " + nodes[idx].group + " - " + nodes[idx].remarks +
+                     "  has been ignored and will not be added.");
       }
     }
     nodes.swap(filtered);
@@ -3429,7 +3509,8 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
       // Exclude patterns
       for (i = 0; i < exclude_patterns.size(); i++) {
         std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)> md(
-            pcre2_match_data_create_from_pattern(exclude_patterns[i].get(), NULL),
+            pcre2_match_data_create_from_pattern(exclude_patterns[i].get(),
+                                                 NULL),
             &pcre2_match_data_free);
         rc = pcre2_match(
             exclude_patterns[i].get(),
@@ -3445,9 +3526,10 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
       if (!excluded) {
         if (include_patterns.size() > 0) {
           for (i = 0; i < include_patterns.size(); i++) {
-            std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)> md(
-                pcre2_match_data_create_from_pattern(include_patterns[i].get(), NULL),
-                &pcre2_match_data_free);
+            std::unique_ptr<pcre2_match_data, decltype(&pcre2_match_data_free)>
+                md(pcre2_match_data_create_from_pattern(
+                       include_patterns[i].get(), NULL),
+                   &pcre2_match_data_free);
             rc = pcre2_match(
                 include_patterns[i].get(),
                 reinterpret_cast<const unsigned char *>(iter->remarks.c_str()),
@@ -3463,8 +3545,9 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
       }
 
       if (excluded || !included) {
-        writeLog(LOG_TYPE_INFO, "Node  " + iter->group + " - " + iter->remarks +
-                                    "  has been ignored and will not be added.");
+        writeLog(LOG_TYPE_INFO,
+                 "Node  " + iter->group + " - " + iter->remarks +
+                     "  has been ignored and will not be added.");
         iter = nodes.erase(iter);
       } else {
         writeLog(LOG_TYPE_INFO, "Node  " + iter->group + " - " + iter->remarks +
@@ -3631,8 +3714,13 @@ bool getSubInfoFromNodes(const std::vector<nodeInfo> &nodes,
 }
 
 bool getSubInfoFromSSD(const std::string &sub, std::string &result) {
+  // 空串防护
+  if (sub.empty())
+    return false;
+
   rapidjson::Document json;
-  json.Parse(urlsafe_base64_decode(sub.substr(6)).data());
+  std::string decoded = urlsafe_base64_decode(regReplace(sub, "^ssd://", ""));
+  json.Parse(decoded.c_str());
   if (json.HasParseError())
     return false;
 

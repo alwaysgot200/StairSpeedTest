@@ -34,5 +34,6 @@
       "title": "Demo App",
       "pattern": "E:/_cpp_work/StairSpeedTest/build/bin/logs/*.log"
     }
-  ]
+  ],
+  "diffEditor.wordWrap": "off"
 }
