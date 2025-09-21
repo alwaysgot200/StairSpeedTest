@@ -17,6 +17,7 @@
 
 std::atomic<bool> start_flag = false;
 std::atomic<time_t> done_time = 0;
+static std::mutex g_results_mutex; // 保护 testedNodes / current_node
 
 // variables from main
 extern std::vector<nodeInfo> allNodes;
@@ -57,7 +58,11 @@ void stairspeed_regenerate_node_list(rapidjson::Document &json) {
   int server_port;
 
   eraseElements(targetNodes);
-  eraseElements(testedNodes);
+  {
+    std::lock_guard<std::mutex> lk(g_results_mutex);
+    eraseElements(testedNodes);
+    current_node = nodeInfo(); // 重置，避免残留
+  }
 
   for (unsigned int i = 0; i < json["configs"].Size(); i++) {
     group = GetMember(json["configs"][i]["config"], "group");
@@ -73,6 +78,12 @@ void stairspeed_regenerate_node_list(rapidjson::Document &json) {
   }
   node_count = json["configs"].Size();
   rewriteNodeID(targetNodes);
+
+  // 预留空间，减少扩容时的争用
+  {
+    std::lock_guard<std::mutex> lk(g_results_mutex);
+    testedNodes.reserve(targetNodes.size());
+  }
 }
 
 double stairspeed_get_speed_number(const std::string &speed) {
@@ -171,28 +182,43 @@ std::string stairspeed_generate_results(std::vector<nodeInfo> &nodes) {
   writer.String(start_flag ? "running" : "stopped");
   writer.Key("current");
   writer.StartObject();
-  for (nodeInfo &x : nodes) {
-    if (x.id == cur_node_id) {
-      node = &x;
+
+  // 锁外序列化的本地副本，避免持锁等待 future
+  nodeInfo current_copy;
+  bool has_current = false;
+  std::vector<nodeInfo> tested_copy;
+
+  {
+    std::lock_guard<std::mutex> lk(g_results_mutex);
+    for (nodeInfo &x : nodes) {
+      if (x.id == cur_node_id) {
+        node = &x;
+      }
+      if (x.id == current_node.id) {
+        current_node = x; // 跟随最新数据
+      }
     }
-    if (x.id == current_node.id) {
-      current_node = x;
+    if (node && node->linkType != -1) {
+      current_copy = *node;
+      has_current = true;
     }
+    if (node && (current_node.groupID != node->groupID ||
+                 current_node.id != node->id)) {
+      if (current_node.linkType != -1) {
+        testedNodes.push_back(current_node);
+      }
+      current_node = *node;
+    }
+    tested_copy = testedNodes; // 拷贝，锁外序列化
   }
-  if (node && node->linkType != -1)
-    json_write_node(writer, *node);
-  if (node &&
-      (current_node.groupID != node->groupID || current_node.id != node->id)) {
-    if (current_node.linkType != -1) {
-      testedNodes.push_back(current_node);
-    }
-    current_node = *node;
-  }
+
+  if (has_current)
+    json_write_node(writer, current_copy);
   writer.EndObject();
 
   writer.Key("results");
   writer.StartArray();
-  for (nodeInfo &x : testedNodes) {
+  for (nodeInfo &x : tested_copy) {
     writer.StartObject();
     json_write_node(writer, x);
     writer.EndObject();
@@ -366,7 +392,8 @@ void stairspeed_webserver_routine(const std::string &listen_address,
           return "error";
         }
 
-        // 关键修复：在启动分离线程前把需要的数据拷贝出来，避免在线程中访问已销毁的 request
+        // 关键修复：在启动分离线程前把需要的数据拷贝出来，避免在线程中访问已销毁的
+        // request
         auto postdata_copy = request.postdata;
 
         std::thread t([postdata = std::move(postdata_copy)]() mutable {

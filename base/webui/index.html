@@ -1,5 +1,11 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stair Speedtest</title>
+  </head>
   <body>
     <div id="app"></div>
     <div
@@ -52,17 +58,99 @@
           if (pending === 0) hide();
         }
 
+        // Start 完成检测与弹窗
+        var __sst_started = false;
+        var __sst_timer = null;
+        function pollStatus() {
+          if (!__sst_started) return;
+          try {
+            fetch("/status")
+              .then(function (r) {
+                return r.text();
+              })
+              .then(function (text) {
+                if (text === "stopped") {
+                  __sst_started = false;
+                  if (__sst_timer) {
+                    clearTimeout(__sst_timer);
+                    __sst_timer = null;
+                  }
+                  alert("test finished");
+                } else {
+                  __sst_timer = setTimeout(pollStatus, 1000);
+                }
+              })
+              .catch(function () {
+                __sst_timer = setTimeout(pollStatus, 1500);
+              });
+          } catch (e) {
+            __sst_timer = setTimeout(pollStatus, 1500);
+          }
+        }
+        function maybeStartPolling(url, method) {
+          try {
+            if (
+              typeof url === "string" &&
+              url.indexOf("/start") !== -1 &&
+              method &&
+              method.toUpperCase() === "POST"
+            ) {
+              __sst_started = true;
+              if (__sst_timer) clearTimeout(__sst_timer);
+              __sst_timer = setTimeout(pollStatus, 300);
+            }
+          } catch (e) {}
+        }
+
         if (window.fetch) {
           var _fetch = window.fetch;
           window.fetch = function (input, init) {
             try {
               var url = typeof input === "string" ? input : input && input.url;
               if (shouldTrack(url)) inc();
+              // 监听 /start POST，触发状态轮询
+              var method =
+                (init && init.method) ||
+                (typeof input === "object" && input && input.method) ||
+                "GET";
+              maybeStartPolling(url, method);
             } catch (e) {}
             var p = _fetch.apply(this, arguments);
             return p.then(
               function (res) {
                 dec();
+                // 对 /start 的返回进行轻量判断（可选，不影响主逻辑）
+                try {
+                  var url =
+                    typeof input === "string" ? input : input && input.url;
+                  var method =
+                    (init && init.method) ||
+                    (typeof input === "object" && input && input.method) ||
+                    "GET";
+                  if (
+                    typeof url === "string" &&
+                    url.indexOf("/start") !== -1 &&
+                    method &&
+                    method.toUpperCase() === "POST"
+                  ) {
+                    // 不消费原响应体，使用 clone() 读取文本
+                    res
+                      .clone()
+                      .text()
+                      .then(function (txt) {
+                        // 若立即返回 "done"，说明无需等待
+                        if (txt && txt.trim() === "done") {
+                          __sst_started = false;
+                          if (__sst_timer) {
+                            clearTimeout(__sst_timer);
+                            __sst_timer = null;
+                          }
+                          alert("test finished");
+                        }
+                      })
+                      .catch(function () {});
+                  }
+                } catch (e) {}
                 return res;
               },
               function (err) {
@@ -80,12 +168,24 @@
           XO.open = function (method, url) {
             this._track_parse =
               shouldTrack(url) && method && method.toUpperCase() === "POST";
+            // 记录是否是 /start POST
+            this._track_start =
+              typeof url === "string" &&
+              url.indexOf("/start") !== -1 &&
+              method &&
+              method.toUpperCase() === "POST";
             return _open.apply(this, arguments);
           };
           XO.send = function () {
             if (this._track_parse) {
               inc();
               this.addEventListener("loadend", dec, { once: true });
+            }
+            if (this._track_start) {
+              // 触发轮询
+              __sst_started = true;
+              if (__sst_timer) clearTimeout(__sst_timer);
+              __sst_timer = setTimeout(pollStatus, 300);
             }
             return _send.apply(this, arguments);
           };

@@ -108,8 +108,9 @@ get_nat_type_thru_socks5(const std::string &server, uint16_t port,
                          const std::string &stun_server = "stun.l.google.com",
                          uint16_t stun_port = 19302);
 
-static inline int to_int(const char* s) {
-  if (!s) return 0;
+static inline int to_int(const char *s) {
+  if (!s)
+    return 0;
   try {
     return std::stoi(std::string(s));
   } catch (...) {
@@ -566,9 +567,13 @@ void chkArg(int argc, char *argv[]) {
       sub_url.assign(argv[++i]);
     else if (!strcmp(argv[i], "/g") && argc > i + 1)
       custom_group.assign(argv[++i]);
-    else if ((!strcmp(argv[i], "/parse-threads") || !strcmp(argv[i], "--parse-threads")) && argc > i + 1)
+    else if ((!strcmp(argv[i], "/parse-threads") ||
+              !strcmp(argv[i], "--parse-threads")) &&
+             argc > i + 1)
       parse_worker_count = to_int(argv[++i]);
-    else if ((!strcmp(argv[i], "/parse-threshold") || !strcmp(argv[i], "--parse-threshold")) && argc > i + 1)
+    else if ((!strcmp(argv[i], "/parse-threshold") ||
+              !strcmp(argv[i], "--parse-threshold")) &&
+             argc > i + 1)
       parse_parallel_threshold = to_int(argv[++i]);
   }
 }
@@ -657,8 +662,8 @@ std::string removeEmoji(const std::string &orig_remark) {
     return orig_remark;
   return remark;
 }
-// test one node
-int singleTest(nodeInfo &node) {
+// test one kind of protocal node
+int singleProtocalTest(nodeInfo &node) {
   node.remarks = trim(removeEmoji(node.remarks)); // remove all emojis
   int retVal = 0;
   std::string logdata, testserver, username, password, proxy;
@@ -880,7 +885,7 @@ void batchTest(std::vector<nodeInfo> &nodes) {
     for (auto &x : nodes) {
       if (custom_group.size() != 0)
         x.group = custom_group;
-      singleTest(x);
+      singleProtocalTest(x);
       // writeResult(&x, export_with_maxspeed);
       tottraffic += x.totalRecvBytes;
       if (x.online)
@@ -1235,7 +1240,7 @@ int main(int argc, char *argv[]) {
   } else if (allNodes.size() == 1) {
     writeLog(LOG_TYPE_INFO, "Speedtest will now begin.");
     printMsg(SPEEDTEST_MESSAGE_BEGIN, rpcmode);
-    singleTest(allNodes[0]);
+    singleProtocalTest(allNodes[0]);
     if (single_test_force_export) {
       printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
       writeLog(LOG_TYPE_INFO, "Now exporting result...");
