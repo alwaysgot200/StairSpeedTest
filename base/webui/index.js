@@ -3810,7 +3810,7 @@ if (!self.__WB_pmw) {
             },
           },
           created: function () {
-            (document.title = "SSR Speed Web UI " + this.webVersion),
+            (document.title = "Stair Speed Web UI " + this.webVersion),
               this.backend.init(this),
               (this.initDialogShow = !0),
               (this.backendPort = this.backend.backendPort),
@@ -28635,7 +28635,7 @@ if (!self.__WB_pmw) {
                           "el-dialog",
                           {
                             attrs: {
-                              title: "SSR Speed Web UI",
+                              title: "Stair Speed Web UI",
                               visible: e.aboutDialogVisible,
                             },
                             on: {
