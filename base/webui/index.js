@@ -15531,10 +15531,6 @@ if (!self.__WB_pmw) {
                   key: "compareVersion",
                   value: function (e) {
                     var t = e.split(".");
-                    Number(t[1]) < 6 &&
-                      alert(
-                        "You are using an older version of StairSpeed, please manually access https://web.绒布球.site/old to enter the old version of WebUI.\n你正在使用StairSpeed的旧版本，请手动访问 https://web.绒布球.site/old 进入旧版的WebUI."
-                      );
                   },
                 },
                 {
@@ -15888,14 +15884,15 @@ if (!self.__WB_pmw) {
                           i = JSON.parse(e.responseText);
                         } catch (e) {
                           console.log(e), clearInterval(t.interval);
+                          // 新增：解析失败也结束 loading，避免按钮一直转
+                          t.vue && (t.vue.startBtnLoading = !1);
                         }
                         "stopped" == i.status
                           ? ((t.taskStatus = "Stopped"),
+                            // 新增：无论是否有结果都结束 loading
+                            (t.vue.startBtnLoading = !1),
                             i.results.length > 0 &&
-                              ((o = i.results),
-                              t.getDiff(o),
-                              t.updateTable(),
-                              (t.vue.startBtnLoading = !1)),
+                              ((o = i.results), t.getDiff(o), t.updateTable()),
                             clearInterval(t.interval))
                           : ("pending" == i.status &&
                               (console.log("Pending."),
@@ -28684,14 +28681,12 @@ if (!self.__WB_pmw) {
                                 "a",
                                 {
                                   attrs: {
-                                    href: "https://github.com/tindy2013/stairspeedtest-reborn",
+                                    href: "https://github.com/alwaygot200/StairSpeedTest",
                                   },
                                 },
                                 [
                                   i("el-button", [
-                                    e._v(
-                                      "Current Project : Stair Speedtest Reborn"
-                                    ),
+                                    e._v("Current Project : StairSpeedtest "),
                                   ]),
                                 ],
                                 1

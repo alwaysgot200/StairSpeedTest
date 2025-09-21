@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <atomic>
+#include <chrono> // 新增
 #include <iostream>
 #include <mutex>
 #include <string>
 #include <thread>
 
+#include "logger.h"
 #include "misc.h"
 #include "nodeinfo.h"
 #include "printout.h"
@@ -14,10 +16,12 @@
 #include "version.h"
 #include "webget.h"
 #include "webserver.h"
+#include <unordered_set>
 
 std::atomic<bool> start_flag = false;
 std::atomic<time_t> done_time = 0;
 static std::mutex g_results_mutex; // 保护 testedNodes / current_node
+static std::atomic<unsigned long long> g_push_seq{0}; // 新增：全局序号发生器
 
 // variables from main
 extern std::vector<nodeInfo> allNodes;
@@ -40,6 +44,46 @@ void batchTest(std::vector<nodeInfo> &nodes);
 std::vector<nodeInfo> targetNodes, testedNodes;
 std::string server_status = "stopped";
 nodeInfo current_node;
+
+// 新增：主流程显式 push 的线程安全入口
+void webui_notify_node_tested(const nodeInfo &node) {
+  using namespace std::chrono;
+  nodeInfo n = node;
+  n.completed_seq = ++g_push_seq;
+  n.completed_ms =
+      duration_cast<milliseconds>(system_clock::now().time_since_epoch())
+          .count();
+
+  std::lock_guard<std::mutex> lk(g_results_mutex);
+  testedNodes.push_back(n);
+
+  // 轻量级日志：打印 node.id、协议类型、testedNodes.size
+  const char *proto = "Unknown";
+  switch (n.linkType) {
+  case SPEEDTEST_MESSAGE_FOUNDSS:
+    proto = "SS";
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDSSR:
+    proto = "SSR";
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDVMESS:
+    proto = "VMess";
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDVLESS:
+    proto = "VLESS";
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDTROJAN:
+    proto = "Trojan";
+    break;
+  default:
+    break;
+  }
+  writeLog(LOG_TYPE_INFO,
+           std::string("[webui] pushed tested node: id=") +
+               std::to_string(n.id) + ", proto=" + proto +
+               ", seq=" + std::to_string(n.completed_seq) +
+               ", testedNodes.size=" + std::to_string(testedNodes.size()));
+}
 
 nodeInfo find_node(std::string &group, std::string &remarks,
                    std::string &server, int &server_port) {
@@ -78,7 +122,6 @@ void stairspeed_regenerate_node_list(rapidjson::Document &json) {
   }
   node_count = json["configs"].Size();
   rewriteNodeID(targetNodes);
-
   // 预留空间，减少扩容时的争用
   {
     std::lock_guard<std::mutex> lk(g_results_mutex);
@@ -98,6 +141,29 @@ void json_write_node(rapidjson::Writer<rapidjson::StringBuffer> &writer,
   geoIPInfo inbound = node.inboundGeoIP.get(),
             outbound = node.outboundGeoIP.get();
   int counter = 0, total = 0;
+  const char *proto = "Unknown";
+  switch (node.linkType) {
+  case SPEEDTEST_MESSAGE_FOUNDSS:
+    proto = "SS";
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDSSR:
+    proto = "SSR";
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDVMESS:
+    proto = "VMess";
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDVLESS:
+    proto = "VLESS";
+    break;
+  case SPEEDTEST_MESSAGE_FOUNDTROJAN:
+    proto = "Trojan";
+    break;
+  default:
+    break;
+  }
+
+  writer.Key("id");
+  writer.Int(node.id);
   writer.Key("group");
   writer.String(node.group.data());
   writer.Key("remarks");
@@ -170,6 +236,16 @@ void json_write_node(rapidjson::Writer<rapidjson::StringBuffer> &writer,
   writer.Double(stairspeed_get_speed_number(node.avgSpeed));
   writer.Key("trafficUsed");
   writer.Int(node.totalRecvBytes);
+
+  // 新增：协议与完成信息
+  writer.Key("linkType");
+  writer.Int(node.linkType);
+  writer.Key("protocol");
+  writer.String(proto);
+  writer.Key("seq");
+  writer.Uint64(node.completed_seq);
+  writer.Key("finishedAt");
+  writer.Uint64(node.completed_ms);
 }
 
 std::string stairspeed_generate_results(std::vector<nodeInfo> &nodes) {
@@ -202,11 +278,9 @@ std::string stairspeed_generate_results(std::vector<nodeInfo> &nodes) {
       current_copy = *node;
       has_current = true;
     }
+    // 仅更新 current_node，不再基于切换事件隐式 push，避免与主流程显式 push 冲突
     if (node && (current_node.groupID != node->groupID ||
                  current_node.id != node->id)) {
-      if (current_node.linkType != -1) {
-        testedNodes.push_back(current_node);
-      }
       current_node = *node;
     }
     tested_copy = testedNodes; // 拷贝，锁外序列化
@@ -216,8 +290,15 @@ std::string stairspeed_generate_results(std::vector<nodeInfo> &nodes) {
     json_write_node(writer, current_copy);
   writer.EndObject();
 
+  // 新增：顶层统计（已测/总数）放在 current 之后，避免误嵌到 current 内部
+  writer.Key("testedCount");
+  writer.Int(static_cast<int>(tested_copy.size()));
+  writer.Key("totalCount");
+  writer.Int(static_cast<int>(nodes.size()));
+
   writer.Key("results");
   writer.StartArray();
+  // 严格使用“主流程显式 push”的完成顺序
   for (nodeInfo &x : tested_copy) {
     writer.StartObject();
     json_write_node(writer, x);
@@ -385,17 +466,14 @@ void stairspeed_webserver_routine(const std::string &listen_address,
         time_t cur_time = time(NULL);
         if (cur_time - done_time < 5)
           return "done";
-
         // 空串防护：不启动线程并返回错误
         if (request.postdata.empty()) {
           response.status_code = 400;
           return "error";
         }
-
         // 关键修复：在启动分离线程前把需要的数据拷贝出来，避免在线程中访问已销毁的
         // request
         auto postdata_copy = request.postdata;
-
         std::thread t([postdata = std::move(postdata_copy)]() mutable {
           start_flag = true;
           rapidjson::Document json;
@@ -405,7 +483,6 @@ void stairspeed_webserver_routine(const std::string &listen_address,
                       sort_method = GetMember(json, "sortMethod"),
                       group = GetMember(json, "group"),
                       exp_color = GetMember(json, "colors");
-
           if (test_mode == "ALL")
             speedtest_mode = "all";
           else if (test_mode == "TCP_PING")
@@ -417,14 +494,12 @@ void stairspeed_webserver_routine(const std::string &listen_address,
           custom_group = group;
           if (exp_color.size())
             export_color_style = exp_color;
-
           stairspeed_regenerate_node_list(json);
           batchTest(targetNodes);
           done_time = time(NULL);
           start_flag = false;
         });
         t.detach();
-
         response.status_code = 202;
         return "running";
       });

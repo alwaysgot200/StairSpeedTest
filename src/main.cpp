@@ -1,12 +1,15 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <map>
 #include <numeric>
 #include <regex>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -23,6 +26,7 @@
 #include "printmsg.h"
 #include "printout.h"
 #include "processes.h"
+#include "rapidjson_extra.h" // 新增：用于解析/生成聚合 v2ray 配置
 #include "renderer.h"
 #include "rulematch.h"
 #include "socket.h"
@@ -82,6 +86,10 @@ bool single_test_force_export = false;
 bool verbose = false;
 std::string export_sort_method = "none";
 
+// 新增：v2ray 分片与并发参数
+int v2ray_shard_size = 200;      // 每片最多节点数
+int v2ray_group_concurrency = 8; // 并发度（可改为 16）
+
 int avail_status[5] = {0, 0, 0, 0, 0};
 unsigned int node_count = 0;
 int curGroupID = 0;
@@ -101,12 +109,28 @@ void getTestFile(nodeInfo &node, const std::string &proxy,
                  const std::string &defaultTestFile);
 void stairspeed_webserver_routine(const std::string &listen_address,
                                   int listen_port);
+// 显式 push：来自 webgui_wrapper.cpp 的线程安全通知接口
+void webui_notify_node_tested(const nodeInfo &node);
 std::string
 get_nat_type_thru_socks5(const std::string &server, uint16_t port,
                          const std::string &username = "",
                          const std::string &password = "",
                          const std::string &stun_server = "stun.l.google.com",
                          uint16_t stun_port = 19302);
+
+// forward declarations for aggregated v2ray concurrent testing helpers
+static bool extract_first_outbound(const std::string &single_config_json,
+                                   rapidjson::Value &out,
+                                   rapidjson::Document::AllocatorType &alloc);
+static std::string buildAggregatedV2RayConfig(
+    const std::vector<std::pair<nodeInfo *, int>> &items);
+static std::vector<int> allocateShardPorts(size_t count, int start_hint_port);
+static int testNodeViaPreparedSocks(nodeInfo &node,
+                                    const std::string &testserver, int testport,
+                                    const std::string &username,
+                                    const std::string &password);
+static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
+                            int concurrency);
 
 static inline int to_int(const char *s) {
   if (!s)
@@ -601,7 +625,7 @@ void saveResult(std::vector<nodeInfo> &nodes) {
   std::string data;
 
   ini.SetCurrentSection("Basic");
-  ini.Set("Tester", "Stair Speedtest Reborn " VERSION);
+  ini.Set("Tester", "StairSpeedtest " VERSION);
   ini.Set("GenerationTime", getTime(3));
 
   // Only write valid nodes according to rules
@@ -881,22 +905,52 @@ void batchTest(std::vector<nodeInfo> &nodes) {
         printMsg(SPEEDTEST_MESSAGE_GOTSERVER, rpcmode, std::to_string(x.id),
                  x.group, x.remarks);
     }
-    // then we start testing nodes
+
+    // 协议分组：vmess+vless 为一组，其它为一组
+    std::vector<nodeInfo *> v2ray_nodes, other_nodes;
+    v2ray_nodes.reserve(nodes.size());
+    other_nodes.reserve(nodes.size());
     for (auto &x : nodes) {
       if (custom_group.size() != 0)
         x.group = custom_group;
-      singleProtocalTest(x);
-      // writeResult(&x, export_with_maxspeed);
-      tottraffic += x.totalRecvBytes;
-      if (x.online)
+      if (x.linkType == SPEEDTEST_MESSAGE_FOUNDVMESS ||
+          x.linkType == SPEEDTEST_MESSAGE_FOUNDVLESS) {
+        v2ray_nodes.push_back(&x);
+      } else {
+        other_nodes.push_back(&x);
+      }
+    }
+
+    // VMESS+VLESS：分片并发（单进程 v2ray）
+    if (!v2ray_nodes.empty()) {
+      writeLog(LOG_TYPE_INFO,
+               "Testing VMESS+VLESS group with shard size " +
+                   std::to_string(v2ray_shard_size) + " and concurrency " +
+                   std::to_string(v2ray_group_concurrency) + " ...");
+      testV2RayShards(v2ray_nodes, v2ray_shard_size, v2ray_group_concurrency);
+    }
+
+    // 其他协议（保持现有串行逻辑）
+    for (auto *px : other_nodes) {
+      singleProtocalTest(*px);
+      tottraffic += px->totalRecvBytes;
+      if (px->online)
+        onlines++;
+      // 显式 push：单个节点完成就推送
+      webui_notify_node_tested(*px);
+    }
+
+    // 汇总统计
+    for (auto *px : v2ray_nodes) {
+      tottraffic += px->totalRecvBytes;
+      if (px->online)
         onlines++;
     }
-    // resultEOF(speedCalc(tottraffic * 1.0), onlines, nodes->size());
+
     writeLog(LOG_TYPE_INFO,
              "All nodes tested. Total/Online nodes: " +
                  std::to_string(node_count) + "/" + std::to_string(onlines) +
                  " Traffic used: " + speedCalc(tottraffic * 1.0));
-    // exportHTML();
     saveResult(nodes);
     if (webserver_mode || !multilink) {
       printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
@@ -913,7 +967,382 @@ void batchTest(std::vector<nodeInfo> &nodes) {
   }
   cur_node_id = -1;
 }
+// 新增：从单节点 config.json 中提取第一个 outbound，拷贝到目标 allocator
+static bool extract_first_outbound(const std::string &single_config_json,
+                                   rapidjson::Value &out,
+                                   rapidjson::Document::AllocatorType &alloc) {
+  rapidjson::Document d;
+  d.Parse(single_config_json.c_str());
+  if (d.HasParseError() || !d.IsObject())
+    return false;
+  if (!d.HasMember("outbounds") || !d["outbounds"].IsArray() ||
+      d["outbounds"].Empty())
+    return false;
+  const auto &ob0 = d["outbounds"][0];
+  out.CopyFrom(ob0, alloc);
+  return true;
+}
 
+// 新增：构造聚合 v2ray 配置（多入站/多出站 + 路由一一映射）
+static std::string buildAggregatedV2RayConfig(
+    const std::vector<std::pair<nodeInfo *, int>> &items) {
+  using namespace rapidjson;
+  Document doc;
+  doc.SetObject();
+  auto &alloc = doc.GetAllocator();
+
+  // log
+  {
+    Value log(kObjectType);
+    log.AddMember("loglevel", "warning", alloc);
+    doc.AddMember("log", log, alloc);
+  }
+
+  // inbounds
+  Value inbounds(kArrayType);
+  // outbounds
+  Value outbounds(kArrayType);
+  // routing
+  Value routing(kObjectType);
+  Value rules(kArrayType);
+
+  for (auto &p : items) {
+    nodeInfo *node = p.first;
+    int port = p.second;
+    std::string in_tag = "in_" + std::to_string(node->id);
+    std::string out_tag = "out_" + std::to_string(node->id);
+
+    // inbound: socks with udp enabled
+    {
+      Value inbound(kObjectType);
+      inbound.AddMember(
+          "tag", Value(in_tag.c_str(), (SizeType)in_tag.size(), alloc), alloc);
+      inbound.AddMember("port", port, alloc);
+      inbound.AddMember("listen", "127.0.0.1", alloc);
+      inbound.AddMember("protocol", "socks", alloc);
+
+      Value settings(kObjectType);
+      settings.AddMember("udp", true, alloc);
+      settings.AddMember("auth", "noauth", alloc);
+      inbound.AddMember("settings", settings, alloc);
+
+      inbounds.PushBack(inbound, alloc);
+    }
+
+    // outbound: 拷贝单节点出站并设置 tag
+    {
+      Value outbound(kObjectType);
+      if (!extract_first_outbound(node->proxyStr, outbound, alloc)) {
+        // 如果解析失败，构造一个直连作为兜底，避免 v2ray 配置非法
+        Value fail_ob(kObjectType);
+        fail_ob.AddMember("protocol", "freedom", alloc);
+        Value settings(kObjectType);
+        fail_ob.AddMember("settings", settings, alloc);
+        fail_ob.AddMember(
+            "tag", Value(out_tag.c_str(), (SizeType)out_tag.size(), alloc),
+            alloc);
+        outbounds.PushBack(fail_ob, alloc);
+      } else {
+        // 覆盖/设置 tag
+        if (outbound.HasMember("tag"))
+          outbound.RemoveMember("tag");
+        outbound.AddMember(
+            "tag", Value(out_tag.c_str(), (SizeType)out_tag.size(), alloc),
+            alloc);
+        // 不在聚合侧二次清洗；单节点构建阶段已完成必要规范化
+        outbounds.PushBack(outbound, alloc);
+      }
+    }
+
+    // routing rule: inbound tag -> outbound tag
+    {
+      Value rule(kObjectType);
+      rule.AddMember("type", "field", alloc);
+
+      Value inTags(kArrayType);
+      inTags.PushBack(Value(in_tag.c_str(), (SizeType)in_tag.size(), alloc),
+                      alloc);
+      rule.AddMember("inboundTag", inTags, alloc);
+
+      rule.AddMember("outboundTag",
+                     Value(out_tag.c_str(), (SizeType)out_tag.size(), alloc),
+                     alloc);
+      rules.PushBack(rule, alloc);
+    }
+  }
+
+  routing.AddMember("rules", rules, alloc);
+  routing.AddMember("domainStrategy", "AsIs", alloc);
+
+  doc.AddMember("inbounds", inbounds, alloc);
+  doc.AddMember("outbounds", outbounds, alloc);
+  doc.AddMember("routing", routing, alloc);
+
+  // 可选：提供一个额外 direct 出站供内部使用（非必须）
+  // 这里不添加，保持极简
+
+  rapidjson::StringBuffer sb;
+  rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
+  doc.Accept(writer);
+  return sb.GetString();
+}
+
+// 新增：准备分片端口（避免冲突，逐一使用 checkPort）
+static std::vector<int> allocateShardPorts(size_t count, int start_hint_port) {
+  std::vector<int> ports;
+  ports.reserve(count);
+  std::set<int> used;
+  int hint = start_hint_port;
+  for (size_t i = 0; i < count; ++i) {
+    int p = checkPort(hint);
+    // 简单去重保护
+    while (used.count(p)) {
+      hint = p + 1;
+      p = checkPort(hint);
+    }
+    ports.push_back(p);
+    used.insert(p);
+    hint = p + 1;
+  }
+  return ports;
+}
+
+// 新增：使用已就绪的本地 SOCKS 代理测试一个节点（并发调用的核心）
+static int testNodeViaPreparedSocks(nodeInfo &node,
+                                    const std::string &testserver, int testport,
+                                    const std::string &username,
+                                    const std::string &password) {
+  // 基于 singleProtocalTest 的核心流程（移除写配置/启动/关闭客户端）
+  node.remarks = trim(removeEmoji(node.remarks));
+  int retVal = 0;
+  std::string logdata, proxy;
+  node.ulTarget = def_upload_target;
+  std::string id = std::to_string(node.id + (rpcmode ? 0 : 1));
+
+  writeLog(LOG_TYPE_INFO,
+           "Received server. Group: " + node.group + " Name: " + node.remarks);
+  auto start = steady_clock::now();
+
+  if (!rpcmode)
+    printMsg(SPEEDTEST_MESSAGE_GOTSERVER, rpcmode, id, node.group, node.remarks,
+             std::to_string(node_count));
+
+  proxy = buildSocks5ProxyString(testserver, testport, username, password);
+
+  writeLog(LOG_TYPE_INFO, "Now started fetching GeoIP info...");
+  printMsg(SPEEDTEST_MESSAGE_STARTGEOIP, rpcmode, id);
+  node.inboundGeoIP.set(std::async(
+      std::launch::async, [node]() { return getGeoIPInfo(node.server, ""); }));
+  node.outboundGeoIP.set(std::async(
+      std::launch::async, [proxy]() { return getGeoIPInfo("", proxy); }));
+
+  if (test_nat_type) {
+    printMsg(SPEEDTEST_MESSAGE_STARTNAT, rpcmode, id);
+    node.natType.set(std::async(std::launch::async, [testserver, testport,
+                                                     username, password]() {
+      return get_nat_type_thru_socks5(testserver, testport, username, password);
+    }));
+  }
+
+  // TCP ping（直连，不走代理）
+  printMsg(SPEEDTEST_MESSAGE_STARTPING, rpcmode, id);
+  if (speedtest_mode != "speedonly") {
+    writeLog(LOG_TYPE_INFO, "Now performing TCP ping...");
+    retVal = tcping(node);
+    if (retVal == SPEEDTEST_ERROR_NORESOLVE) {
+      writeLog(LOG_TYPE_ERROR, "Node address resolve error.");
+      printMsg(SPEEDTEST_ERROR_NORESOLVE, rpcmode, id);
+      return SPEEDTEST_ERROR_NORESOLVE;
+    }
+    if (node.pkLoss == "100.00%") {
+      writeLog(LOG_TYPE_ERROR, "Cannot connect to this node.");
+      printMsg(SPEEDTEST_ERROR_NOCONNECTION, rpcmode, id);
+      return SPEEDTEST_ERROR_NOCONNECTION;
+    }
+    logdata = std::accumulate(
+        std::next(std::begin(node.rawPing)), std::end(node.rawPing),
+        std::to_string(node.rawPing[0]), [](std::string a, int b) {
+          return std::move(a) + " " + std::to_string(b);
+        });
+    writeLog(LOG_TYPE_RAW, logdata);
+    writeLog(LOG_TYPE_INFO,
+             "TCP Ping: " + node.avgPing + "  Packet Loss: " + node.pkLoss);
+  } else {
+    node.pkLoss = "0.00%";
+  }
+  printMsg(SPEEDTEST_MESSAGE_GOTPING, rpcmode, id, node.avgPing, node.pkLoss);
+
+  getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
+
+  if (!webserver_mode) {
+    geoIPInfo outbound = node.outboundGeoIP.get();
+    if (outbound.organization.size()) {
+      writeLog(LOG_TYPE_INFO, "Got outbound ISP: " + outbound.organization +
+                                  "  Country code: " + outbound.country_code);
+      printMsg(SPEEDTEST_MESSAGE_GOTGEOIP, rpcmode, id, outbound.organization,
+               outbound.country_code);
+    } else
+      printMsg(SPEEDTEST_ERROR_GEOIPERR, rpcmode, id);
+    if (test_nat_type)
+      printMsg(SPEEDTEST_MESSAGE_GOTNAT, rpcmode, id, node.natType.get());
+  }
+
+  if (test_site_ping) {
+    printMsg(SPEEDTEST_MESSAGE_STARTGPING, rpcmode, id);
+    writeLog(LOG_TYPE_INFO, "Now performing site ping...");
+    sitePing(node, testserver, testport, username, password, site_ping_url);
+    logdata = std::accumulate(
+        std::next(std::begin(node.rawSitePing)), std::end(node.rawSitePing),
+        std::to_string(node.rawSitePing[0]), [](std::string a, int b) {
+          return std::move(a) + " " + std::to_string(b);
+        });
+    writeLog(LOG_TYPE_RAW, logdata);
+    writeLog(LOG_TYPE_INFO, "Site ping: " + node.sitePing);
+    printMsg(SPEEDTEST_MESSAGE_GOTGPING, rpcmode, id, node.sitePing);
+  }
+
+  printMsg(SPEEDTEST_MESSAGE_STARTSPEED, rpcmode, id);
+  if (speedtest_mode != "pingonly") {
+    writeLog(LOG_TYPE_INFO, "Now performing file download speed test...");
+    perform_test(node, testserver, testport, username, password,
+                 def_thread_count);
+    logdata = std::accumulate(
+        std::next(std::begin(node.rawSpeed)), std::end(node.rawSpeed),
+        std::to_string(node.rawSpeed[0]), [](std::string a, int b) {
+          return std::move(a) + " " + std::to_string(b);
+        });
+    writeLog(LOG_TYPE_RAW, logdata);
+    if (node.totalRecvBytes == 0) {
+      writeLog(LOG_TYPE_ERROR, "Speedtest returned no speed.");
+      printMsg(SPEEDTEST_ERROR_RETEST, rpcmode, id);
+      perform_test(node, testserver, testport, username, password,
+                   def_thread_count);
+      logdata = std::accumulate(
+          std::next(std::begin(node.rawSpeed)), std::end(node.rawSpeed),
+          std::to_string(node.rawSpeed[0]), [](std::string a, int b) {
+            return std::move(a) + " " + std::to_string(b);
+          });
+      writeLog(LOG_TYPE_RAW, logdata);
+      if (node.totalRecvBytes == 0) {
+        writeLog(LOG_TYPE_ERROR, "Speedtest returned no speed 2 times.");
+        printMsg(SPEEDTEST_ERROR_NOSPEED, rpcmode, id);
+        printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed,
+                 node.maxSpeed);
+        return SPEEDTEST_ERROR_NOSPEED;
+      }
+    }
+  }
+  printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed,
+           node.maxSpeed);
+
+  if (test_upload) {
+    writeLog(LOG_TYPE_INFO, "Now performing upload speed test...");
+    printMsg(SPEEDTEST_MESSAGE_STARTUPD, rpcmode, id);
+    upload_test(node, testserver, testport, username, password);
+    printMsg(SPEEDTEST_MESSAGE_GOTUPD, rpcmode, id, node.ulSpeed);
+  }
+
+  writeLog(LOG_TYPE_INFO,
+           "Average speed: " + node.avgSpeed + "  Max speed: " + node.maxSpeed +
+               "  Upload speed: " + node.ulSpeed + "  Traffic used in bytes: " +
+               std::to_string(node.totalRecvBytes));
+  node.online = true;
+
+  auto end = steady_clock::now();
+  auto lapse = duration_cast<seconds>(end - start);
+  node.duration = lapse.count();
+
+  // 关键修复：Web 模式下，确保异步任务在返回前完成，避免被随后 kill 的 v2ray
+  // 进程影响
+  if (webserver_mode) {
+    // 这些 get() 不打印，仅确保数据就绪，防止 /getresults 阻塞
+    (void)node.inboundGeoIP.get();
+    (void)node.outboundGeoIP.get();
+    if (test_nat_type) {
+      (void)node.natType.get();
+    }
+  }
+
+  sleep(300);
+  return SPEEDTEST_ERROR_NONE;
+}
+
+// 新增：对某协议分组（VMESS 或 VLESS）进行“分片 + 单进程 v2ray 并发测试”
+static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
+                            int concurrency) {
+  if (group.empty())
+    return;
+
+  // 分片迭代
+  for (size_t i = 0; i < group.size(); i += shard_size) {
+    size_t j_end = std::min(group.size(), i + (size_t)shard_size);
+    std::vector<nodeInfo *> shard(group.begin() + i, group.begin() + j_end);
+
+    // 为该分片分配本地端口
+    auto ports = allocateShardPorts(shard.size(), socksport);
+
+    // 生成 items 列表 (node*, port)
+    std::vector<std::pair<nodeInfo *, int>> items;
+    items.reserve(shard.size());
+    for (size_t k = 0; k < shard.size(); ++k) {
+      items.emplace_back(shard[k], ports[k]);
+    }
+
+    // 写聚合配置并启动 v2ray
+    std::string config = buildAggregatedV2RayConfig(items);
+    writeLog(LOG_TYPE_INFO, "Writing aggregated config file...");
+    fileWrite("config.json", config, true);
+
+    bool ok = runClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+    if (!ok) {
+      writeLog(
+          LOG_TYPE_ERROR,
+          "Client startup failed. Please check config.json and client binary.");
+      for (auto *n : shard) {
+        // 简单标记失败
+        n->online = false;
+        // 显式
+        // push：即使分片启动失败，也把节点作为失败项推送到结果，保证“有东西可看”
+        webui_notify_node_tested(*n);
+      }
+      continue; // 继续下一个分片
+    }
+
+    // 等待所有入站端口就绪
+    for (auto p : ports) {
+      if (!waitUntilSocksReady(socksaddr, p, "", "", 2000)) {
+        writeLog(LOG_TYPE_WARN,
+                 "SOCKS inbound seems not ready at " + socksaddr + ":" +
+                     std::to_string(p) +
+                     " after waiting. Will continue and may fail.");
+      }
+    }
+
+    // 并发测试
+    std::vector<std::future<void>> futures;
+    for (size_t k = 0; k < shard.size(); ++k) {
+      // 控制并发度
+      while (futures.size() >= (size_t)concurrency) {
+        futures.front().get();
+        futures.erase(futures.begin());
+      }
+      nodeInfo *n = shard[k];
+      int p = ports[k];
+      futures.emplace_back(std::async(std::launch::async, [n, p]() {
+        testNodeViaPreparedSocks(*n, socksaddr, p, "", "");
+        // 显式 push：严格按完成顺序追加
+        webui_notify_node_tested(*n);
+      }));
+    }
+    // 收尾等待
+    for (auto &f : futures)
+      f.get();
+
+    // 终止 v2ray 进程
+    killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+    sleep(200);
+  }
+}
 void rewriteNodeID(std::vector<nodeInfo> &nodes) {
   int index = 0;
   for (auto &x : nodes) {
@@ -1134,7 +1563,7 @@ int main(int argc, char *argv[]) {
   signal(SIGINT, signalHandler);
 
   if (!rpcmode)
-    SetConsoleTitle("Stair Speedtest Reborn " VERSION);
+    SetConsoleTitle("StairSpeedtest " VERSION);
 
   // kill any client before testing
 #ifdef __APPLE__

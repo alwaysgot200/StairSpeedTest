@@ -20,8 +20,9 @@ std::string config_ssr_win =
     R"({"remarks":"?remarks?","id":"18C4949EBCFE46687AE4A7645725D35F","server":"?server?","server_port":?port?,"server_udp_port":0,"password":"?password?","method":"?method?","protocol":"?protocol?","protocolparam":"?protoparam?","obfs":"?obfs?","obfsparam":"?obfsparam?","remarks_base64":"?remarks_base64?","group":"?group?","enable":true,"udp_over_tcp":false})";
 std::string config_ssr_libev =
     R"({"server":"?server?","server_port":?port?,"protocol":"?protocol?","method":"?method?","obfs":"?obfs?","password":"?password?","obfs_param":"?obfsparam?","protocol_param":"?protoparam?","local_address":"127.0.0.1","local_port":?localport?,"reuse_port":true})";
+// 顶部常量定义处（更新 base_vmess，加入 "grpcSettings": ?grpcset?）
 std::string base_vmess =
-    R"({"log":{"access":"logs/v2ray-access.log","error":"logs/v2ray-error.log","loglevel":"debug"},"inbounds":[{"port":?localport?,"listen":"127.0.0.1","protocol":"socks","settings":{"udp":true}}],"outbounds":[{"tag":"proxy","protocol":"vmess","settings":{"vnext":[{"address":"?add?","port":?port?,"users":[{"id":"?id?","alterId":?aid?,"email":"t@t.tt","security":"?cipher?"}]}]},"streamSettings":{"network":"?net?","security":"?tls?","tlsSettings":?tlsset?,"tcpSettings":?tcpset?,"wsSettings":?wsset?,"kcpSettings":?kcpset?,"httpSettings":?h2set?,"quicSettings":?quicset?},"mux":{"enabled":false}}],"routing":{"domainStrategy":"IPIfNonMatch"}})";
+    R"({"log":{"access":"logs/v2ray-access.log","error":"logs/v2ray-error.log","loglevel":"debug"},"inbounds":[{"port":?localport?,"listen":"127.0.0.1","protocol":"socks","settings":{"udp":true}}],"outbounds":[{"tag":"proxy","protocol":"vmess","settings":{"vnext":[{"address":"?add?","port":?port?,"users":[{"id":"?id?","alterId":?aid?,"email":"t@t.tt","security":"?cipher?"}]}]},"streamSettings":{"network":"?net?","security":"?tls?","tlsSettings":?tlsset?,"tcpSettings":?tcpset?,"wsSettings":?wsset?,"kcpSettings":?kcpset?,"httpSettings":?h2set?,"quicSettings":?quicset?,"grpcSettings":?grpcset?},"mux":{"enabled":false}}],"routing":{"domainStrategy":"IPIfNonMatch"}})";
 std::string wsset_vmess =
     R"({"connectionReuse":true,"path":"?path?","headers":{"Host":"?host?"?edge?}})";
 std::string tcpset_vmess =
@@ -36,7 +37,7 @@ std::string quicset_vmess =
 std::string base_trojan =
     R"({"run_type":"client","local_addr":"127.0.0.1","local_port":?localport?,"remote_addr":"?server?","remote_port":?port?,"password":["?password?"],"ssl":{"verify":?verify?,"verify_hostname":?verifyhost?,"sni":"?host?"},"tcp":{"reuse_port":true}})";
 std::string base_vless =
-    R"({ "log": {"access":"logs/v2ray-access.log","error":"logs/v2ray-error.log","loglevel":"debug"}, "inbounds": [ { "listen": "127.0.0.1", "port": ?localport?, "protocol": "socks", "settings": { "auth": "noauth", "udp": true }, "sniffing": { "enabled": true, "destOverride": ["http","tls"], "routeOnly": true } } ], "outbounds": [ { "protocol": "vless", "settings": { "vnext": [ { "address": "?add?", "port": ?port?, "users": [ { "id": "?id?", "encryption": "none", "flow": "?flow?" } ] } ] }, "streamSettings": { "network": "?net?", "security": "?security?", "tlsSettings": ?tlsset?, "tcpSettings": ?tcpset?, "wsSettings": ?wsset?, "kcpSettings": ?kcpset?, "quicSettings": ?quicset?, "httpSettings": ?h2set?, "grpcSettings": ?grpcset? }, "mux": ?mux? } ], "routing": { "domainStrategy": "IPIfNonMatch" } })";
+    R"({ "log": {"access":"logs/v2ray-access.log","error":"logs/v2ray-error.log","loglevel":"debug"}, "inbounds": [ { "listen": "127.0.0.1", "port": ?localport?, "protocol": "socks", "settings": { "auth": "noauth", "udp": true }, "sniffing": { "enabled": true, "destOverride": ["http","tls"], "routeOnly": true } } ], "outbounds": [ { "protocol": "vless", "settings": { "vnext": [ { "address": "?add?", "port": ?port?, "users": [ { "id": "?id?", "encryption": "none", "flow": "?flow?" } ] } ] }, "streamSettings": { "network": "?net?", "security": "?security?", "tlsSettings": ?tlsset?, "realitySettings": ?realset?, "tcpSettings": ?tcpset?, "wsSettings": ?wsset?, "kcpSettings": ?kcpset?, "quicSettings": ?quicset?, "httpSettings": ?h2set?, "grpcSettings": ?grpcset? }, "mux": ?mux? } ], "routing": { "domainStrategy": "IPIfNonMatch" } })";
 std::string tlsset_vless =
     R"({"serverName":"?serverName?","allowInsecure":?verify?,"allowInsecureCiphers":true,"alpn":?alpn?,"fingerprint":"?fp?"})";
 std::string xh2set_vless = R"({"path":"?path?","host":[?host?]})";
@@ -46,50 +47,50 @@ std::string quicset_vless =
     R"({"security":"?host?","key":"?path?","header":{"type":"?type?"}})";
 
 int explodeLog(const std::string &log, std::vector<nodeInfo> &nodes) {
-    INIReader ini;
-    std::vector<std::string> nodeList, vArray;
-    std::string strTemp;
-    nodeInfo node;
+  INIReader ini;
+  std::vector<std::string> nodeList, vArray;
+  std::string strTemp;
+  nodeInfo node;
 
-    // 空串防护：来自外部输入时，空输入直接返回错误
-    if (log.empty())
-        return -1;
+  // 空串防护：来自外部输入时，空输入直接返回错误
+  if (log.empty())
+    return -1;
 
-    if (!startsWith(log, "[Basic]"))
-        return -1;
+  if (!startsWith(log, "[Basic]"))
+    return -1;
 
-    ini.Parse(log);
+  ini.Parse(log);
 
-    if (!ini.SectionExist("Basic") || !ini.ItemExist("Basic", "GenerationTime") ||
-        !ini.ItemExist("Basic", "Tester"))
-        return -1;
+  if (!ini.SectionExist("Basic") || !ini.ItemExist("Basic", "GenerationTime") ||
+      !ini.ItemExist("Basic", "Tester"))
+    return -1;
 
-    nodeList = ini.GetSections();
-    node.proxyStr = "LOG";
-    for (auto &x : nodeList) {
-        if (x == "Basic")
-            continue;
-        ini.EnterSection(x);
-        vArray = split(x, "^");
-        node.group = vArray[0];
-        node.remarks = vArray[1];
-        node.avgPing = ini.Get("AvgPing");
-        node.avgSpeed = ini.Get("AvgSpeed");
-        node.groupID = ini.GetNumber<int>("GroupID");
-        node.id = ini.GetNumber<int>("ID");
-        node.maxSpeed = ini.Get("MaxSpeed");
-        node.online = ini.GetBool("Online");
-        node.pkLoss = ini.Get("PkLoss");
-        ini.GetNumberArray<int>("RawPing", ",", node.rawPing);
-        ini.GetNumberArray<int>("RawSitePing", ",", node.rawSitePing);
-        ini.GetNumberArray<unsigned long long>("RawSpeed", ",", node.rawSpeed);
-        node.sitePing = ini.Get("SitePing");
-        node.totalRecvBytes = ini.GetNumber<unsigned long long>("UsedTraffic");
-        node.ulSpeed = ini.Get("ULSpeed");
-        nodes.push_back(node);
-    }
+  nodeList = ini.GetSections();
+  node.proxyStr = "LOG";
+  for (auto &x : nodeList) {
+    if (x == "Basic")
+      continue;
+    ini.EnterSection(x);
+    vArray = split(x, "^");
+    node.group = vArray[0];
+    node.remarks = vArray[1];
+    node.avgPing = ini.Get("AvgPing");
+    node.avgSpeed = ini.Get("AvgSpeed");
+    node.groupID = ini.GetNumber<int>("GroupID");
+    node.id = ini.GetNumber<int>("ID");
+    node.maxSpeed = ini.Get("MaxSpeed");
+    node.online = ini.GetBool("Online");
+    node.pkLoss = ini.Get("PkLoss");
+    ini.GetNumberArray<int>("RawPing", ",", node.rawPing);
+    ini.GetNumberArray<int>("RawSitePing", ",", node.rawSitePing);
+    ini.GetNumberArray<unsigned long long>("RawSpeed", ",", node.rawSpeed);
+    node.sitePing = ini.Get("SitePing");
+    node.totalRecvBytes = ini.GetNumber<unsigned long long>("UsedTraffic");
+    node.ulSpeed = ini.Get("ULSpeed");
+    nodes.push_back(node);
+  }
 
-    return 0;
+  return 0;
 }
 
 std::string replace_first(std::string str, const std::string &old_value,
@@ -170,7 +171,8 @@ std::string vmessConstruct(const std::string &group, const std::string &remarks,
     std::string h2set = h2set_vmess;
     h2set = replace_first(h2set, "?path?", path);
 
-    // 兼容 host 为空：若 add 非 IP 且 host 为空，则用 add；否则允许为空（输出 []）
+    // 兼容 host 为空：若 add 非 IP 且 host 为空，则用 add；否则允许为空（输出
+    // []）
     std::string effectiveHost = trim(host);
     if (effectiveHost.empty() && !isIPv4(add) && !isIPv6(add)) {
       effectiveHost = add;
@@ -186,11 +188,12 @@ std::string vmessConstruct(const std::string &group, const std::string &remarks,
       if (hostItems.empty()) {
         hostList = "";
       } else {
-        hostList = std::accumulate(std::next(hostItems.begin()), hostItems.end(),
-                                   std::string("\"") + hostItems[0] + "\"",
-                                   [](auto before, auto current) {
-                                     return before + ",\"" + current + "\"";
-                                   });
+        hostList =
+            std::accumulate(std::next(hostItems.begin()), hostItems.end(),
+                            std::string("\"") + hostItems[0] + "\"",
+                            [](auto before, auto current) {
+                              return before + ",\"" + current + "\"";
+                            });
       }
     }
 
@@ -204,6 +207,12 @@ std::string vmessConstruct(const std::string &group, const std::string &remarks,
     quicset = replace_first(quicset, "?path?", path);
     quicset = replace_first(quicset, "?type?", type);
     base = replace_first(base, "?quicset?", quicset);
+    break;
+  }
+  case "grpc"_hash: { // 新增：仅保留 serviceName，不输出 multiMode
+    std::string grpcset = R"({"serviceName":"?service?"})";
+    grpcset = replace_first(grpcset, "?service?", path);
+    base = replace_first(base, "?grpcset?", grpcset);
     break;
   }
   case "tcp"_hash:
@@ -226,16 +235,22 @@ std::string vmessConstruct(const std::string &group, const std::string &remarks,
     base = replace_first(base, "?tlsset?", tlsset);
   }
 
-  base = replace_first(base, "?tls?", tls);
+  // 规范 security 值为 tls/none，避免出现空串等非法值
+  {
+    std::string tlsv = toLower(trim(tls)) == "tls" ? "tls" : "none";
+    base = replace_first(base, "?tls?", tlsv);
+  }
   base = replace_first(base, "?tcpset?", "null");
   base = replace_first(base, "?wsset?", "null");
   base = replace_first(base, "?tlsset?", "null");
   base = replace_first(base, "?kcpset?", "null");
   base = replace_first(base, "?h2set?", "null");
   base = replace_first(base, "?quicset?", "null");
+  base = replace_first(base, "?grpcset?", "null"); // 新增：收尾置空
 
   return base;
 }
+// 在 vlessConvlessConstruct 之后新增：公开 API 的薄封装，统一指向实现体
 std::string vlessConstruct(const std::string &add, const std::string &port,
                            const std::string &type, const std::string &id,
                            const std::string &net, const std::string &path,
@@ -252,7 +267,7 @@ std::string vlessConstruct(const std::string &add, const std::string &port,
   replace_placeholder_all(base, "add", add);
   replace_placeholder_all(base, "port", port);
   replace_placeholder_all(base, "id", id);
-  replace_placeholder_all(base, "flow", flow); // 新增：flow 直填到 users
+  replace_placeholder_all(base, "flow", flow); // 初填 flow，稍后按条件清理
 
   // 2) network
   std::string netv = net.empty() ? "tcp" : toLower(trim(net));
@@ -269,7 +284,7 @@ std::string vlessConstruct(const std::string &add, const std::string &port,
                                  use_reality ? "reality"
                                              : (use_tls ? "tls" : "none"));
 
-  // 注意：这里不再“预置 null”，而是先尝试填充各传输配置
+  // 4) 传输设置
   if (hash_(netv) == "ws"_hash) {
     std::string wsset = wsset_vmess;
     wsset = replace_first(wsset, "?host?",
@@ -317,7 +332,8 @@ std::string vlessConstruct(const std::string &add, const std::string &port,
     replace_placeholder_all(base, "tcpset", tcpset);
   }
   if (hash_(netv) == "grpc"_hash) {
-    std::string grpcset = R"({"serviceName":"?service?","multiMode":false})";
+    // 移除 multiMode，仅保留 serviceName
+    std::string grpcset = R"({"serviceName":"?service?"})";
     grpcset = replace_first(grpcset, "?service?", path);
     replace_placeholder_all_either(base, "gprcset", "grpcset", grpcset);
   }
@@ -362,11 +378,20 @@ std::string vlessConstruct(const std::string &add, const std::string &port,
     replace_placeholder_all(base, "tlsset", tlsset);
   }
 
-  // 8) 清理模板里可能遗留的 "tls" 等误占位
+  // 7) 清理模板里可能遗留的 "tls" 等误占位
   replace_placeholder_all(base, "tls", "null");
 
-  // 9) mux：外部传空 => 写入 null；否则写入对象
+  // 8) mux：外部传空 => 写入 null；否则写入对象
   replace_placeholder_all(base, "mux", mux_json.empty() ? "null" : mux_json);
+
+  // 9) flow 清理：仅 Reality+Vision 保留，其余情况移除 "flow" 键
+  {
+    const bool flow_empty = trim(flow).empty();
+    const bool keep_flow = use_reality && !flow_empty;
+    if (!keep_flow) {
+      base = regReplace(base, ",\\s*\\\"flow\\\"\\s*:\\s*\\\"[^\\\"]*\\\"", "");
+    }
+  }
 
   // 10) 收尾：仅将“仍未被填充的占位符”置为 null
   replace_placeholder_all(base, "tcpset", "null");

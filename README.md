@@ -1,10 +1,10 @@
-# Stair Speedtest Reborn
+# StairSpeedtest
 
 **Proxy performance batch tester based on Shadowsocks(R), V2Ray and Trojan**  
-[![Build Status](https://github.com/tindy2013/stairspeedtest-reborn/actions/workflows/build.yml/badge.svg)](https://github.com/tindy2013/stairspeedtest-reborn/actions/workflows/build.yml)
-[![GitHub tag (latest SemVer)](https://img.shields.io/github/tag/tindy2013/stairspeedtest-reborn.svg)](https://github.com/tindy2013/stairspeedtest-reborn/tags)
-[![GitHub release](https://img.shields.io/github/release/tindy2013/stairspeedtest-reborn.svg)](https://github.com/tindy2013/stairspeedtest-reborn/releases)
-[![GitHub license](https://img.shields.io/github/license/tindy2013/stairspeedtest-reborn.svg)](https://github.com/tindy2013/stairspeedtest-reborn/blob/master/LICENSE)
+[![Build Status](https://github.com/alwaysgot200/StairSpeedTest/actions/workflows/build.yml/badge.svg)](https://github.com/alwaysgot200/StairSpeedTest/actions/workflows/build.yml)
+[![GitHub tag (latest SemVer)](https://img.shields.io/github/tag/alwaysgot200/StairSpeedTest.svg)](https://github.com/alwaysgot200/StairSpeedTest/tags)
+[![GitHub release](https://img.shields.io/github/release/alwaysgot200/StairSpeedTest.svg)](https://github.com/alwaysgot200/StairSpeedTest/releases)
+[![GitHub license](https://img.shields.io/github/license/alwaysgot200/StairSpeedTest.svg)](https://github.com/alwaysgot200/StairSpeedTest/blob/master/LICENSE)
 
 ## Intro
 
@@ -21,7 +21,7 @@ This is a C++ remake version of the original [Stair Speedtest](https://github.co
 
 ### Prebuilt release
 
-Go to [Release Page](https://github.com/tindy2013/stairspeedtest-reborn/releases).
+Go to [Release Page](https://github.com/alwaysgot200/StairSpeedTest/releases).
 
 ### Build
 

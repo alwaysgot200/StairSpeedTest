@@ -494,8 +494,8 @@ std::string exportRender(std::string resultpath, std::vector<nodeInfo> &nodes,
   std::string gentime = "Generated at " + getTime(3);
   std::string traffic =
       "Traffic used : " + speedCalc((double)total_traffic) + ". ";
-  std::string about = "By Stair Speedtest Reborn " VERSION ".";
-  std::string title = "  Stair Speedtest Reborn Result Table ( " VERSION " )  ";
+  std::string about = "By StairSpeedtest  " VERSION ".";
+  std::string title = "  StairSpeedtest  Result Table ( " VERSION " )  ";
   // StairSpeed style
   if (export_as_stairspeed) {
     traffic += "Time used: " + secondToString(test_duration) +
@@ -827,7 +827,7 @@ std::string exportRender(std::string resultpath, vector<nodeInfo> nodes,
   std::string traffic = "Traffic used : " + speedCalc((double)total_traffic) +
                         ". Working Node(s) : [" + std::to_string(onlines) +
                         "/" + std::to_string(node_count) + "]";
-  std::string about = "By Stair Speedtest Reborn " VERSION ".";
+  std::string about = "By StairSpeedtest  " VERSION ".";
 
   final_width =
       max(getWidth(&png, font, fontsize, gentime) + center_align_offset,
@@ -960,8 +960,9 @@ std::string exportRender(std::string resultpath, vector<nodeInfo> nodes,
   png.line(1, 1, total_width, 1, border_red, border_green,
            border_blue); // bottom
   png.line(1, total_height, total_width, total_height, border_red, border_green,
-           border_blue);                                                  // top
-  png.line(1, 1, 1, total_height, border_red, border_green, border_blue); // left
+           border_blue); // top
+  png.line(1, 1, 1, total_height, border_red, border_green,
+           border_blue); // left
   png.line(total_width, 1, total_width, total_height, border_red, border_green,
            border_blue); // right
   png.close();           // save picture

@@ -35,5 +35,5 @@
       "pattern": "E:/_cpp_work/StairSpeedTest/build/bin/logs/*.log"
     }
   ],
-  "diffEditor.wordWrap": "off"
+  "editor.wordWrap": "off"
 }
