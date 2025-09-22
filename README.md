@@ -94,15 +94,22 @@ Supported proxy types:
 
 一、最快上手
 打开 cmd，切到 软件 目录```
-运行程序，按提示在控制台粘贴你的订阅链接（或单节点链接），回车开始测速
-.\stairspeedtest.exe
-多个订阅/链接可以用 | 分隔，一次性测试多个组
-测完后到 ./results 查看导出的图片结果，到 ./logs 查看日志
-也可以：把订阅 URL 或者节点文件 直接作为参数传入（省去交互输入）注意要将 webserver_mode = false 否则将无法进行批量处理
-.\stairspeedtest.exe /u "https://example.com/subscription.txt"
-StairSpeedtest.exe /u "e:\_cpp_work\StairSpeedTest\res\sample.txt"
-也可以指定自定义分组名（导出图片会用到）
-.\stairspeedtest.exe /u "https://example.com/subscription.txt" /g "我的分组"
+
+- 运行程序，按提示在控制台粘贴你的订阅链接（或单节点链接），回车开始测速
+  .\stairspeedtest.exe
+
+- 多个订阅/链接可以用 | 分隔，一次性测试多个组
+  测完后到 ./results 查看导出的图片结果，到 ./logs 查看日志
+- 也可以：把订阅 URL 或者节点文件 直接作为参数传入（省去交互输入）
+  注意要将 webserver_mode = false 否则将无法进行批量处理
+
+  .\stairspeedtest.exe /u "https://example.com/subscription.txt"
+
+  StairSpeedtest.exe /u "e:\_cpp_work\StairSpeedTest\res\sample.txt"
+
+- 也可以指定自定义分组名（导出图片会用到）
+
+  .\stairspeedtest.exe /u "https://example.com/subscription.txt" /g "我的分组"
 
 二、内置 Web 界面（推荐，零依赖）
 
