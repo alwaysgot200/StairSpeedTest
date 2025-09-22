@@ -85,6 +85,9 @@ void explodeVmess(std::string vmess, const std::string &custom_port,
   if (!regFind(vmess, "(?i)^(vmess|vmess1)://"))
     return;
 
+  if (node.originalUrl.empty())
+    node.originalUrl = vmess;
+
   std::string version, ps, add, port, type, id, aid, net, path, host, tls;
   Document jsondata;
   std::vector<std::string> vArray;
@@ -352,6 +355,10 @@ void explodeVless(std::string vless, const std::string &custom_port,
   // Ensure scheme is vless:// (大小写不敏感)
   if (!regFind(vless, "(?i)^vless://"))
     return;
+
+  // 记录原始 vless 分享链接
+  if (node.originalUrl.empty())
+    node.originalUrl = vless;
 
   if (regMatch(vless, "(?i)vless://(.*?)@(.*)")) {
     explodeStdVLess(vless, custom_port, node);
@@ -790,6 +797,8 @@ void explodeSS(std::string ss, bool libev, const std::string &custom_port,
   std::string ps, password, method, server, port, plugins, plugin, pluginopts,
       addition, group = SS_DEFAULT_GROUP, secret;
   // std::vector<std::string> args, secret;
+  if (node.originalUrl.empty())
+    node.originalUrl = ss;
   ss = replace_all_distinct(ss.substr(5), "/?", "?");
   if (strFind(ss, "#")) {
     ps = UrlDecode(ss.substr(ss.find("#") + 1));
@@ -909,6 +918,36 @@ void explodeSSD(std::string link, bool libev, const std::string &custom_port,
     node.port = to_int(port, 1);
     node.proxyStr = ssConstruct(group, remarks, server, port, password, method,
                                 plugin, pluginopts, libev);
+
+    // 为 ssd:// 订阅的逐条节点构造原始 ss 分享链接
+    {
+      std::string host = server;
+      if (isIPv6(host)) host = "[" + host + "]";
+      std::string secret = urlsafe_base64_encode(method + ":" + password);
+      std::string orig = "ss://" + secret + "@" + host + ":" + port;
+
+      std::string query;
+      // plugin 参数（形如 plugin=pluginName;opts，需要整体 UrlEncode）
+      if (!plugin.empty() || !pluginopts.empty()) {
+        std::string plugin_full = plugin;
+        if (!pluginopts.empty()) {
+          if (!plugin_full.empty()) plugin_full += ";";
+          plugin_full += pluginopts;
+        }
+        query += "plugin=" + UrlEncode(plugin_full);
+      }
+      // group 参数（urlsafe_base64 编码）
+      if (!group.empty()) {
+        if (!query.empty()) query += "&";
+        query += "group=" + urlsafe_base64_encode(group);
+      }
+      if (!query.empty()) orig += "?" + query;
+      // 备注放在 # 后（UrlEncode）
+      if (!remarks.empty()) orig += "#" + UrlEncode(remarks);
+
+      node.originalUrl = orig;
+    }
+
     node.id = index;
     nodes.emplace_back(std::move(node));
     node = nodeInfo();
@@ -1025,6 +1064,8 @@ void explodeSSR(std::string ssr, bool ss_libev, bool ssr_libev,
   std::string strobfs;
   std::string remarks, group, server, port, method, password, protocol,
       protoparam, obfs, obfsparam, remarks_base64;
+  if (node.originalUrl.empty())
+    node.originalUrl = ssr;
   ssr = replace_all_distinct(ssr.substr(6), "\r", "");
   ssr = urlsafe_base64_decode(ssr);
   if (strFind(ssr, "/?")) {
@@ -1169,6 +1210,8 @@ void explodeSSRConf(std::string content, const std::string &custom_port,
 void explodeSocks(std::string link, const std::string &custom_port,
                   nodeInfo &node) {
   std::string group, remarks, server, port, username, password;
+  if (node.originalUrl.empty())
+    node.originalUrl = link;
   if (strFind(link, "socks://")) // v2rayn socks link
   {
     std::vector<std::string> arguments;
@@ -1213,6 +1256,8 @@ void explodeSocks(std::string link, const std::string &custom_port,
 void explodeHTTP(const std::string &link, const std::string &custom_port,
                  nodeInfo &node) {
   std::string group, remarks, server, port, username, password;
+  if (node.originalUrl.empty())
+    node.originalUrl = link; // tg://http / https://t.me/http
   server = getUrlArg(link, "server");
   port = getUrlArg(link, "port");
   username = UrlDecode(getUrlArg(link, "user"));
@@ -1283,6 +1328,8 @@ void explodeTrojan(std::string trojan, const std::string &custom_port,
                    nodeInfo &node) {
   std::string server, port, psk, addition, group, remark, host;
   tribool tfo, scv;
+  if (node.originalUrl.empty())
+    node.originalUrl = trojan;
   trojan.erase(0, 9);
   string_size pos = trojan.rfind("#");
 
@@ -1837,6 +1884,11 @@ void explodeStdVLess(std::string vless, const std::string &custom_port,
 
   if (!regMatch(vless, "(?i)^vless://.*"))
     return;
+
+  // 记录原始 vless 分享链接
+  if (node.originalUrl.empty())
+    node.originalUrl = vless;
+
   vless = vless.substr(8);
   string_size pos;
 
@@ -3407,7 +3459,11 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
   const size_t parallel_threshold = 512;
   if (nodes.size() >= parallel_threshold) {
     const unsigned int hw = std::thread::hardware_concurrency();
-    const size_t worker_count = std::max<size_t>(2, hw ? hw * 2 : 8);
+    int worker_cfg = (parse_worker_count > 0)
+                           ? parse_worker_count
+                           : (hw ? static_cast<int>(hw) * 2 : 8);
+    const size_t worker_count =
+        static_cast<size_t>(std::max(2, worker_cfg));
     std::atomic<size_t> next_idx{0};
 
     // Result bitmap: 1 = keep, 0 = drop

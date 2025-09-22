@@ -17,6 +17,8 @@ struct nodeInfo {
   std::string server;
   int port = 0;
   std::string proxyStr;
+  // 记录原始分享链接（如 vless://...），仅在由分享链接解析时填充
+  std::string originalUrl;
   unsigned long long rawSpeed[20] = {};
   unsigned long long totalRecvBytes = 0;
   int duration = 0;

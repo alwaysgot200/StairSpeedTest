@@ -9,6 +9,8 @@
 #include <regex>
 #include <set>
 #include <string>
+#include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -87,7 +89,7 @@ bool verbose = false;
 std::string export_sort_method = "none";
 
 // 新增：v2ray 分片与并发参数
-int v2ray_shard_size = 200;      // 每片最多节点数
+int v2ray_shard_size = 256;      // 每片最多节点数
 int v2ray_group_concurrency = 8; // 并发度（可改为 16）
 
 int avail_status[5] = {0, 0, 0, 0, 0};
@@ -97,7 +99,7 @@ int curGroupID = 0;
 int global_log_level = LOG_LEVEL_ERROR;
 bool serve_cache_on_fetch_fail = false, print_debug_info = false;
 int parse_worker_count = 0;
-int parse_parallel_threshold = 512;
+int parse_parallel_threshold = 256;
 
 // declarations
 
@@ -477,6 +479,7 @@ void readConf(std::string path) {
   ini.GetIfExist("override_conf_port", override_conf_port);
   ini.GetIntIfExist("thread_count", def_thread_count);
   ini.GetBoolIfExist("pause_on_done", pause_on_done);
+
   // read GET limit (MB) and convert to bytes; and custom site ping URL
   ini.GetIntIfExist("http_get_max_size_mb", http_get_max_size_mb);
   if (http_get_max_size_mb <= 0)
@@ -489,6 +492,9 @@ void readConf(std::string path) {
   ini.EnterSection("parse");
   ini.GetIntIfExist("parallel_threshold", parse_parallel_threshold);
   ini.GetIntIfExist("worker_count", parse_worker_count);
+  // 允许从 INI 覆盖 v2ray 并发与分片参数
+  ini.GetIntIfExist("v2ray_group_concurrency", v2ray_group_concurrency);
+  ini.GetIntIfExist("v2ray_shard_size", v2ray_shard_size);
 
   ini.EnterSection("export");
   ini.GetBoolIfExist("export_with_maxspeed", export_with_maxspeed);
@@ -623,6 +629,8 @@ export_sort_method; exportResult(htmpath, "tools\\misc\\util.js",
 void saveResult(std::vector<nodeInfo> &nodes) {
   INIReader ini;
   std::string data;
+  std::string url_lines;          // collect original URLs of valid nodes
+  std::string original_url_lines; // collect original share links of valid nodes
 
   ini.SetCurrentSection("Basic");
   ini.Set("Tester", "StairSpeedtest " VERSION);
@@ -632,27 +640,33 @@ void saveResult(std::vector<nodeInfo> &nodes) {
   for (nodeInfo &x : nodes) {
     bool valid = false;
 
+    // 新逻辑：只要站点延迟或下载测速任一有结果即视为有效
+    bool has_site_ping = false;
     if (test_site_ping) {
-      // Site ping enabled: require at least one successful site ping sample
       for (int v : x.rawSitePing) {
         if (v > 0) {
-          valid = true;
+          has_site_ping = true;
           break;
         }
       }
-    } else {
-      // Site ping disabled
-      if (speedtest_mode == "pingonly") {
-        // No real download verification performed: skip all
-        valid = false;
-      } else {
-        // Download speed test performed: require actual data received
-        valid = (x.totalRecvBytes > 0);
-      }
     }
+    bool has_download =
+        (speedtest_mode != "pingonly") && (x.totalRecvBytes > 0);
+    valid = has_site_ping || has_download;
 
     if (!valid)
       continue;
+
+    // record original URL for valid nodes (exclude placeholder "LOG")
+    if (!x.proxyStr.empty() && x.proxyStr != "LOG") {
+      url_lines += x.proxyStr;
+      url_lines += "\n";
+    }
+    // 收集原始分享链接（仅在字段非空时）
+    if (!x.originalUrl.empty()) {
+      original_url_lines += x.originalUrl;
+      original_url_lines += "\n";
+    }
 
     ini.SetCurrentSection(x.group + "^" + x.remarks);
     ini.Set("AvgPing", x.avgPing);
@@ -668,6 +682,34 @@ void saveResult(std::vector<nodeInfo> &nodes) {
     ini.SetArray("RawPing", ",", x.rawPing);
     ini.SetArray("RawSitePing", ",", x.rawSitePing);
     ini.SetArray("RawSpeed", ",", x.rawSpeed);
+  }
+
+  // write valid nodes' URLs to a .urls.txt file alongside the result log
+  if (!url_lines.empty()) {
+    std::string urlPath = resultPath;
+    size_t slash_pos = urlPath.find_last_of("\\/");
+    size_t dot_pos = urlPath.find_last_of('.');
+    if (dot_pos != std::string::npos &&
+        (slash_pos == std::string::npos || dot_pos > slash_pos)) {
+      urlPath.replace(dot_pos, std::string::npos, ".urls.txt");
+    } else {
+      urlPath += ".urls.txt";
+    }
+    fileWrite(urlPath, url_lines, true);
+  }
+
+  // 新增：导出原始分享链接到 .originalUrl.txt
+  if (!original_url_lines.empty()) {
+    std::string originalPath = resultPath;
+    size_t slash_pos2 = originalPath.find_last_of("\\/");
+    size_t dot_pos2 = originalPath.find_last_of('.');
+    if (dot_pos2 != std::string::npos &&
+        (slash_pos2 == std::string::npos || dot_pos2 > slash_pos2)) {
+      originalPath.replace(dot_pos2, std::string::npos, ".originalUrl.txt");
+    } else {
+      originalPath += ".originalUrl.txt";
+    }
+    fileWrite(originalPath, original_url_lines, true);
   }
 
   ini.ToFile(resultPath);
@@ -1358,6 +1400,34 @@ void rewriteNodeGroupID(std::vector<nodeInfo> &nodes, int groupID) {
                 [&](nodeInfo &x) { x.groupID = groupID; });
 }
 
+// 全局去重：按 protocol(linkType) + host(server) + port 唯一，保序
+static void dedupNodesByProtoHostPort(std::vector<nodeInfo> &nodes) {
+  std::unordered_set<std::string> seen;
+  std::vector<nodeInfo> out;
+  out.reserve(nodes.size());
+
+  for (auto &n : nodes) {
+    // 从结果导入（LOG）不参与去重
+    if (n.proxyStr == "LOG") {
+      out.push_back(n);
+      continue;
+    }
+    const std::string key = std::to_string(n.linkType) + "|" +
+                            toLower(trim(n.server)) + "|" +
+                            std::to_string(n.port);
+    if (seen.insert(key).second) {
+      out.push_back(n); // 首次出现，保留
+    }
+  }
+
+  if (out.size() != nodes.size()) {
+    writeLog(LOG_TYPE_INFO, "Global de-dup (protocol+host+port): " +
+                                std::to_string(nodes.size()) + " -> " +
+                                std::to_string(out.size()));
+  }
+  nodes.swap(out);
+}
+
 void addNodes(std::string link, bool multilink) {
   int linkType = -1;
   std::vector<nodeInfo> nodes;
@@ -1543,6 +1613,39 @@ int main(int argc, char *argv[]) {
   makeDir("results");
   logInit(rpcmode);
   readConf("pref.ini");
+  // 新增：统一收敛 shard_size 与 concurrency（均支持“合并/继承”策略）
+  {
+    const unsigned int hw = std::thread::hardware_concurrency();
+    const int auto_workers = hw ? static_cast<int>(hw) * 2 : 8;
+    const int auto_threshold =
+        (parse_parallel_threshold > 0) ? parse_parallel_threshold : 512;
+
+    // 未显式设置时，分片大小继承 parallel_threshold
+    if (v2ray_shard_size <= 0)
+      v2ray_shard_size = auto_threshold;
+    if (v2ray_shard_size < 1)
+      v2ray_shard_size = 1;
+
+    // 未显式设置时，并发继承 parse.worker_count 或 2*HW
+    if (v2ray_group_concurrency <= 0)
+      v2ray_group_concurrency =
+          (parse_worker_count > 0) ? parse_worker_count : auto_workers;
+    if (v2ray_group_concurrency < 1)
+      v2ray_group_concurrency = 1;
+
+    // 并发不超过分片大小
+    if (v2ray_group_concurrency > v2ray_shard_size)
+      v2ray_group_concurrency = v2ray_shard_size;
+
+    writeLog(LOG_TYPE_INFO,
+             "Effective params: parallel_threshold=" +
+                 std::to_string(auto_threshold) + ", v2ray_shard_size=" +
+                 std::to_string(v2ray_shard_size) + ", parse_workers=" +
+                 std::to_string(parse_worker_count > 0 ? parse_worker_count
+                                                       : auto_workers) +
+                 ", v2ray_group_concurrency=" +
+                 std::to_string(v2ray_group_concurrency));
+  }
 #ifdef _WIN32
   // start up windows socket library first
   WSADATA wsd;
@@ -1617,7 +1720,8 @@ int main(int argc, char *argv[]) {
   } else {
     addNodes(link, multilink);
   }
-  rewriteNodeID(allNodes); // reset all index
+  dedupNodesByProtoHostPort(allNodes); // 新增：全局去重（按协议+主机+端口）
+  rewriteNodeID(allNodes);             // reset all index
   node_count = allNodes.size();
   if (allNodes.size() > 1) // group or multi-link
   {

@@ -39,6 +39,8 @@ extern int http_timeout_seconds; // 新增
 void addNodes(std::string link, bool multilink);
 void rewriteNodeID(std::vector<nodeInfo> &nodes);
 void batchTest(std::vector<nodeInfo> &nodes);
+// 新增：在使用前做前置声明，避免“未声明的标识符”
+static void dedupNodesByProtoHostPort_web(std::vector<nodeInfo> &nodes);
 
 // webui variables
 std::vector<nodeInfo> targetNodes, testedNodes;
@@ -78,7 +80,7 @@ void webui_notify_node_tested(const nodeInfo &node) {
   default:
     break;
   }
-  writeLog(LOG_TYPE_INFO,
+  writeLog(LOG_TYPE_DEBUG,
            std::string("[webui] pushed tested node: id=") +
                std::to_string(n.id) + ", proto=" + proto +
                ", seq=" + std::to_string(n.completed_seq) +
@@ -97,32 +99,34 @@ nodeInfo find_node(std::string &group, std::string &remarks,
 }
 
 void stairspeed_regenerate_node_list(rapidjson::Document &json) {
-  nodeInfo node;
-  std::string group, remarks, server;
-  int server_port;
+  // 移除未使用变量（原先这里有：nodeInfo node; 以及 group/remarks/server/server_port 的声明）
 
   eraseElements(targetNodes);
   {
     std::lock_guard<std::mutex> lk(g_results_mutex);
     eraseElements(testedNodes);
     current_node = nodeInfo(); // 重置，避免残留
+    g_push_seq = 0; // 重置全局序号，开启新一轮测试
   }
 
   for (unsigned int i = 0; i < json["configs"].Size(); i++) {
-    group = GetMember(json["configs"][i]["config"], "group");
-    remarks = GetMember(json["configs"][i]["config"], "remarks");
-    server = GetMember(json["configs"][i]["config"], "server");
-    server_port = stoi(GetMember(json["configs"][i]["config"], "server_port"));
+    std::string group = GetMember(json["configs"][i]["config"], "group");
+    std::string remarks = GetMember(json["configs"][i]["config"], "remarks");
+    std::string server = GetMember(json["configs"][i]["config"], "server");
+    int server_port = stoi(GetMember(json["configs"][i]["config"], "server_port"));
+
     auto iter = std::find_if(allNodes.begin(), allNodes.end(), [&](auto x) {
       return x.group == group && x.remarks == remarks && x.server == server &&
              x.port == server_port;
     });
     if (iter != allNodes.end())
-      targetNodes.push_back(*iter);
+      targetNodes.push_back(*iter); // 直接复制，保留其在 allNodes 中已分配的 id
   }
   node_count = json["configs"].Size();
-  rewriteNodeID(targetNodes);
-  // 预留空间，减少扩容时的争用
+
+  // 关键改动：不再 rewriteNodeID(targetNodes)，保持与读取时分配的 ID 一致
+  // rewriteNodeID(targetNodes);
+
   {
     std::lock_guard<std::mutex> lk(g_results_mutex);
     testedNodes.reserve(targetNodes.size());
@@ -339,6 +343,8 @@ std::string stairspeed_generate_web_configs(std::vector<nodeInfo> &nodes) {
     }
     writer.Key("config");
     writer.StartObject();
+    writer.Key("id");  // 新增：节点ID
+    writer.Int(x.id);
     writer.Key("group");
     writer.String(x.group.data());
     writer.Key("remarks");
@@ -435,6 +441,11 @@ void stairspeed_webserver_routine(const std::string &listen_address,
                     suburl = GetMember(json, "url");
                     eraseElements(allNodes);
                     addNodes(suburl, false);
+
+                    // 新增：读取后先去重，再统一分配 ID
+                    dedupNodesByProtoHostPort_web(allNodes);
+                    rewriteNodeID(allNodes);
+
                     return stairspeed_generate_web_configs(allNodes);
                   });
 
@@ -448,14 +459,18 @@ void stairspeed_webserver_routine(const std::string &listen_address,
                     if (request.postdata.empty())
                       return "error";
 
-                    // fileWrite("received.txt", getFormData(postdata), true);
                     if (explodeConfContent(getFormData(request.postdata),
                                            override_conf_port, ss_libev,
                                            ssr_libev, allNodes) ==
                         SPEEDTEST_ERROR_UNRECOGFILE)
                       return "error";
-                    else
+                    else {
+                      // 新增：读取后先去重，再统一分配 ID
+                      dedupNodesByProtoHostPort_web(allNodes);
+                      rewriteNodeID(allNodes);
+
                       return stairspeed_generate_web_configs(allNodes);
+                    }
                   });
 
   append_response(
@@ -471,29 +486,31 @@ void stairspeed_webserver_routine(const std::string &listen_address,
           response.status_code = 400;
           return "error";
         }
-        // 关键修复：在启动分离线程前把需要的数据拷贝出来，避免在线程中访问已销毁的
-        // request
+        // 关键修复：在启动分离线程前把需要的数据拷贝出来，避免在线程中访问已销毁的 request
         auto postdata_copy = request.postdata;
         std::thread t([postdata = std::move(postdata_copy)]() mutable {
           start_flag = true;
           rapidjson::Document json;
           // 在线程中仅使用 postdata 副本
           json.Parse(postdata.c_str());
-          std::string test_mode = GetMember(json, "testMode"),
+          std::string test_mode   = GetMember(json, "testMode"),
                       sort_method = GetMember(json, "sortMethod"),
-                      group = GetMember(json, "group"),
-                      exp_color = GetMember(json, "colors");
+                      group       = GetMember(json, "group"),
+                      exp_color   = GetMember(json, "colors");
+
           if (test_mode == "ALL")
             speedtest_mode = "all";
           else if (test_mode == "TCP_PING")
             speedtest_mode = "pingonly";
+
           std::transform(sort_method.begin(), sort_method.end(),
                          sort_method.begin(), ::tolower);
-          export_sort_method =
-              replace_all_distinct(sort_method, "reverse_", "r");
+          export_sort_method = replace_all_distinct(sort_method, "reverse_", "r");
+
           custom_group = group;
           if (exp_color.size())
             export_color_style = exp_color;
+
           stairspeed_regenerate_node_list(json);
           batchTest(targetNodes);
           done_time = time(NULL);
@@ -512,4 +529,32 @@ void stairspeed_webserver_routine(const std::string &listen_address,
   std::cerr << "Stair Speedtest " VERSION " Web server running @ http://"
             << listen_address << ":" << listen_port << std::endl;
   start_web_server_multi(&args);
+}
+
+// 文件顶部合适位置（如 extern 变量之后）增加本地去重函数
+static void dedupNodesByProtoHostPort_web(std::vector<nodeInfo> &nodes) {
+  std::unordered_set<std::string> seen;
+  std::vector<nodeInfo> out;
+  out.reserve(nodes.size());
+
+  for (auto &n : nodes) {
+    // 从结果导入（LOG）不参与去重
+    if (n.proxyStr == "LOG") {
+      out.push_back(n);
+      continue;
+    }
+    const std::string key = std::to_string(n.linkType) + "|" +
+                            toLower(trim(n.server)) + "|" +
+                            std::to_string(n.port);
+    if (seen.insert(key).second) {
+      out.push_back(n); // 首次出现，保留
+    }
+  }
+
+  if (out.size() != nodes.size()) {
+    writeLog(LOG_TYPE_INFO, "Global de-dup (protocol+host+port): " +
+                                std::to_string(nodes.size()) + " -> " +
+                                std::to_string(out.size()));
+  }
+  nodes.swap(out);
 }

@@ -18,7 +18,8 @@ enum
     LOG_TYPE_GPING,
     LOG_TYPE_RENDER,
     LOG_TYPE_FILEUL,
-    LOG_TYPE_STUN
+    LOG_TYPE_STUN,
+    LOG_TYPE_DEBUG // 新增：DEBUG 类型
 };
 
 enum

@@ -15655,9 +15655,11 @@ if (!self.__WB_pmw) {
                       var t = this.configs[e].config.group,
                         i = this.configs[e].config.remarks,
                         o = this.configs[e].config.server_port,
-                        r = this.configs[e].config.server;
+                        r = this.configs[e].config.server,
+                        n = this.configs[e].config.id; // 新增：获取节点ID
                       this.vue.configTableData.push({
                         key: e,
+                        id: n, // 新增：添加id字段
                         group: t,
                         remarks: i,
                         address: r,
@@ -15837,6 +15839,7 @@ if (!self.__WB_pmw) {
                               outbound: { address: "N/A", info: "N/A" },
                             }),
                           this.diffResults.push({
+                            id: e[t].id, // 新增：后端结果里的唯一 ID
                             group: e[t].group,
                             remarks: e[t].remarks,
                             loss:
@@ -28322,6 +28325,16 @@ if (!self.__WB_pmw) {
                                         e._v(" "),
                                         i("el-table-column", {
                                           attrs: {
+                                            prop: "id",
+                                            label: "ID",
+                                            "min-width": 8,
+                                            align: "center",
+                                            sortable: "",
+                                          },
+                                        }),
+                                        e._v(" "),
+                                        i("el-table-column", {
+                                          attrs: {
                                             sortable: "",
                                             prop: "group",
                                             label: "Group",
@@ -28851,6 +28864,16 @@ if (!self.__WB_pmw) {
                                       },
                                     },
                                   ]),
+                                }),
+                                e._v(" "),
+                                i("el-table-column", {
+                                  attrs: {
+                                    sortable: "",
+                                    prop: "id",
+                                    label: "ID",
+                                    "min-width": 6,
+                                    align: "center",
+                                  },
                                 }),
                                 e._v(" "),
                                 i("el-table-column", {

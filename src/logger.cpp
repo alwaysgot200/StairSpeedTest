@@ -114,8 +114,12 @@ void writeLog(int type, std::string content, int level)
     case LOG_TYPE_RENDER:
         typestr = "[RENDER]";
         break;
+    case LOG_TYPE_DEBUG:             // 新增：DEBUG 标签
+        typestr = "[DEBUG]";
+        break;
     case LOG_TYPE_STUN:
         typestr = "[STUN]";
+        break;
     }
     content = timestr + typestr + content + "\n";
     fileWrite(logPath, content, false);
