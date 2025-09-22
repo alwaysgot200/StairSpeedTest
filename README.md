@@ -86,7 +86,10 @@ Supported proxy types:
 
 ## TODO
 
-- Nothing yet
+- 对于 ss/trojan/socks 增加并发支持
+- 增加对 hy2 的支持，引用 singbox
+- 处理 getinvalidnode, 剔除无效节点算法
+- 增加对 netflex/gemini 探测分类
 
 ---
 
