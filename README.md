@@ -101,8 +101,6 @@ Supported proxy types:
 也可以：把订阅 URL 或者节点文件 直接作为参数传入（省去交互输入）注意要将 webserver_mode = false 否则将无法进行批量处理
 .\stairspeedtest.exe /u "https://example.com/subscription.txt"
 StairSpeedtest.exe /u "e:\_cpp_work\StairSpeedTest\res\sample.txt"
-StairSpeedtest.exe /u "e:\_cpp_work\StairSpeedTest\res\sample.txt" --output "e:\out\links.txt"
-导出的结果已经去重了，且仅包含有效的全部节点链接，指能通过了 代理网站访问延时，或者可以代理下载的节点。
 也可以指定自定义分组名（导出图片会用到）
 .\stairspeedtest.exe /u "https://example.com/subscription.txt" /g "我的分组"
 
