@@ -2,14 +2,14 @@
 #include <chrono>
 #include <iostream>
 #include <mutex>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <pthread.h>
 #include <queue>
 #include <string>
 #include <thread>
 #include <unistd.h>
-
-#include <openssl/err.h>
-#include <openssl/ssl.h>
+#include <vector>
 
 #include "logger.h"
 #include "misc.h"
@@ -99,7 +99,7 @@ static void SSL_Library_init() {
 
 int _thread_download(std::string host, int port, std::string uri,
                      std::string localaddr, int localport, std::string username,
-                     std::string password, bool useTLS = false) {
+                     std::string password, bool useTLS /* = false */) {
   launched++;
   still_running++;
   defer(still_running--;) char bufRecv[BUF_SIZE];
@@ -139,6 +139,10 @@ int _thread_download(std::string host, int port, std::string uri,
 
         ssl = SSL_new(ctx);
     defer(SSL_free(ssl);) SSL_set_fd(ssl, sHost);
+
+    // New: set SNI and auto-retry for TLS
+    SSL_set_tlsext_host_name(ssl, host.c_str());
+    SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
 
     if (SSL_connect(ssl) != 1) {
       ERR_print_errors_fp(stderr);
@@ -187,7 +191,7 @@ int _thread_download(std::string host, int port, std::string uri,
 
 int _thread_upload(std::string host, int port, std::string uri,
                    std::string localaddr, int localport, std::string username,
-                   std::string password, bool useTLS = false) {
+                   std::string password, bool useTLS /* = false */) {
   launched++;
   still_running++;
   defer(still_running--;) int retVal, cur_len;
@@ -224,6 +228,10 @@ int _thread_upload(std::string host, int port, std::string uri,
 
         ssl = SSL_new(ctx);
     defer(SSL_free(ssl);) SSL_set_fd(ssl, sHost);
+
+    // New: set SNI and auto-retry for TLS
+    SSL_set_tlsext_host_name(ssl, host.c_str());
+    SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
 
     if (SSL_connect(ssl) != 1) {
       ERR_print_errors_fp(stderr);
@@ -312,18 +320,15 @@ int perform_test(nodeInfo &node, std::string localaddr, int localport,
   } else {
     writeLog(LOG_TYPE_FILEDL, "Found HTTP URL.");
   }
-
-  int running;
   thread_args args = {host,      port,     uri,      localaddr,
                       localport, username, password, useTLS};
-  // std::thread threads[thread_count];
-  pthread_t threads[thread_count];
+
+  std::vector<pthread_t> threads(thread_count);
   launched = 0;
   for (i = 0; i != thread_count; i++) {
     writeLog(LOG_TYPE_FILEDL,
              "Starting up thread #" + std::to_string(i + 1) + ".");
-    // threads[i] = std::thread(_thread_download, host, port, uri, localaddr,
-    // localport, username, password, useTLS);
+
     pthread_create(&threads[i], NULL, _thread_download_caller, &args);
   }
   while (!launched)
@@ -333,23 +338,45 @@ int perform_test(nodeInfo &node, std::string localaddr, int localport,
   auto start = steady_clock::now();
   unsigned long long transferred_bytes = 0, last_bytes = 0, this_bytes = 0,
                      cur_recv_bytes = 0, max_speed = 0;
-  for (i = 1; i < 21; i++) {
-    sleep(500); // accumulate data
+
+  // 新增：下载测试的可调限制（后续可改为从 ini 读取）
+  static const int DL_INTERVAL_MS = 500; // 采样间隔
+  static const int DL_TICKS = 10;        // 最多采样次数（10*0.5s≈5s）
+  static const unsigned long long DL_MAX_TOTAL_BYTES =
+      2ULL * 1024 * 1024;                   // 达到上限即停（~2MiB）
+  static const int DL_STABLE_WINDOW = 4;    // 连续 N 点用来判定“稳定”
+  static const double DL_STABLE_TOL = 0.08; // 稳定阈值：±8%
+  static const int DL_EARLY_ABORT_TICKS =
+      6; // 低速早停的最小采样数（6*0.5s≈3s）
+  static const unsigned long long DL_EARLY_ABORT_BYTES =
+      64ULL * 1024; // 低速早停的累计阈值
+
+  // 计算最多可写入 rawSpeed 的槽数，避免越界
+  int max_slots = sizeof(node.rawSpeed) / sizeof(node.rawSpeed[0]);
+  int tick_limit = DL_TICKS > max_slots ? max_slots : DL_TICKS;
+
+  // 简单的滑动窗口（固定数组）用于“速度稳定提前停”判断
+  unsigned long long recent[8] = {0};
+  int recent_size = 0;
+
+  for (i = 1; i <= tick_limit; i++) {
+    sleep(DL_INTERVAL_MS); // 按设定间隔采样
+
     cur_recv_bytes = received_bytes;
-    this_bytes = (cur_recv_bytes - transferred_bytes) *
-                 2; // these bytes were received in 0.5s
+    unsigned long long delta_bytes = cur_recv_bytes - transferred_bytes;
+    // 统一换算为“每秒字节数”
+    this_bytes = (delta_bytes * 1000) / DL_INTERVAL_MS;
     transferred_bytes = cur_recv_bytes;
 
     node.rawSpeed[i - 1] = this_bytes;
     if (i % 2 == 0) {
-      max_speed =
-          std::max(max_speed, (this_bytes + last_bytes) /
-                                  2); // pick 2 speed point and get average
-                                      // before calculating max speed
+      max_speed = std::max(max_speed, (this_bytes + last_bytes) /
+                                          2); // 两点平均再取最大，降低抖动
     } else {
       last_bytes = this_bytes;
     }
-    running = still_running;
+
+    int running = still_running;
     writeLog(
         LOG_TYPE_FILEDL,
         "Running threads: " + std::to_string(running) +
@@ -357,8 +384,49 @@ int perform_test(nodeInfo &node, std::string localaddr, int localport,
             ", current received bytes: " + std::to_string(this_bytes) + ".");
     if (!running)
       break;
-    draw_progress_dl(i, this_bytes);
+    draw_progress_dl(i, static_cast<int>(this_bytes));
+
+    // 1) 达到总流量上限，提前结束
+    if (DL_MAX_TOTAL_BYTES > 0 && transferred_bytes >= DL_MAX_TOTAL_BYTES) {
+      writeLog(LOG_TYPE_FILEDL, "Early stop: reached max total bytes limit.");
+      break;
+    }
+
+    // 2) 低速早停：一定时间仍几乎无进展
+    if (i >= DL_EARLY_ABORT_TICKS && transferred_bytes < DL_EARLY_ABORT_BYTES) {
+      writeLog(LOG_TYPE_FILEDL, "Early stop: too slow (low total bytes).");
+      break;
+    }
+
+    // 3) 速度稳定提前停：最近 N 个点波动在阈值内
+    if (DL_STABLE_WINDOW > 0) {
+      if (recent_size < DL_STABLE_WINDOW) {
+        recent[recent_size++] = this_bytes;
+      } else {
+        // 左移一位，丢弃最老，加入最新
+        for (int k = 1; k < DL_STABLE_WINDOW; ++k) {
+          recent[k - 1] = recent[k];
+        }
+        recent[DL_STABLE_WINDOW - 1] = this_bytes;
+      }
+      if (recent_size == DL_STABLE_WINDOW) {
+        unsigned long long vmin = recent[0], vmax = recent[0];
+        for (int k = 1; k < DL_STABLE_WINDOW; ++k) {
+          if (recent[k] < vmin)
+            vmin = recent[k];
+          if (recent[k] > vmax)
+            vmax = recent[k];
+        }
+        // 以 vmax 作为尺度，波动范围不超过 8% 视为稳定
+        if (vmax > 0 && (vmax - vmin) <= static_cast<unsigned long long>(
+                                             vmax * DL_STABLE_TOL)) {
+          writeLog(LOG_TYPE_FILEDL, "Early stop: speed stabilized.");
+          break;
+        }
+      }
+    }
   }
+
   std::cerr << std::endl;
   writeLog(LOG_TYPE_FILEDL, "Test completed. Terminate all threads.");
   EXIT_FLAG = true;              // terminate all threads right now
@@ -385,17 +453,6 @@ int perform_test(nodeInfo &node, std::string localaddr, int localport,
                                 " bytes in " + std::to_string(deltatime) +
                                 " milliseconds.");
   for (int i = 0; i < thread_count; i++) {
-    /*
-    if(threads[i].joinable())
-        threads[i].join();//wait until all threads has exited
-    */
-    /*
-    #ifdef _WIN32
-            pthread_kill(threads[i], SIGINT);
-    #else
-            pthread_kill(threads[i], SIGUSR1);
-    #endif
-    */
     pthread_cancel(threads[i]);
     pthread_join(threads[i], NULL);
     writeLog(LOG_TYPE_FILEDL,
@@ -628,7 +685,8 @@ int sitePing(nodeInfo &node, std::string localaddr, int localport,
 
         // 为 HTTPS 目标设置 SNI，使用解析得到的 host
         if (!SSL_set_tlsext_host_name(ssl, host.c_str())) {
-          writeLog(LOG_TYPE_GPING, "OpenSSL: Failed to set SNI for host: " + host);
+          writeLog(LOG_TYPE_GPING,
+                   "OpenSSL: Failed to set SNI for host: " + host);
         }
 
         if (SSL_connect(ssl) != 1)

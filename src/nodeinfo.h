@@ -38,6 +38,9 @@ struct nodeInfo {
   FutureHelper<std::string> natType{"Unknown"};
   unsigned long long completed_seq = 0; // 新增：完成序号（单调递增）
   unsigned long long completed_ms = 0;  // 新增：完成时间（毫秒）
+
+  // 新增：持久化出站 GeoIP 的国家代码
+  std::string outboundCountryCode;
 };
 
 #endif // NODEINFO_H_INCLUDED

@@ -922,7 +922,8 @@ void explodeSSD(std::string link, bool libev, const std::string &custom_port,
     // 为 ssd:// 订阅的逐条节点构造原始 ss 分享链接
     {
       std::string host = server;
-      if (isIPv6(host)) host = "[" + host + "]";
+      if (isIPv6(host))
+        host = "[" + host + "]";
       std::string secret = urlsafe_base64_encode(method + ":" + password);
       std::string orig = "ss://" + secret + "@" + host + ":" + port;
 
@@ -931,19 +932,23 @@ void explodeSSD(std::string link, bool libev, const std::string &custom_port,
       if (!plugin.empty() || !pluginopts.empty()) {
         std::string plugin_full = plugin;
         if (!pluginopts.empty()) {
-          if (!plugin_full.empty()) plugin_full += ";";
+          if (!plugin_full.empty())
+            plugin_full += ";";
           plugin_full += pluginopts;
         }
         query += "plugin=" + UrlEncode(plugin_full);
       }
       // group 参数（urlsafe_base64 编码）
       if (!group.empty()) {
-        if (!query.empty()) query += "&";
+        if (!query.empty())
+          query += "&";
         query += "group=" + urlsafe_base64_encode(group);
       }
-      if (!query.empty()) orig += "?" + query;
+      if (!query.empty())
+        orig += "?" + query;
       // 备注放在 # 后（UrlEncode）
-      if (!remarks.empty()) orig += "#" + UrlEncode(remarks);
+      if (!remarks.empty())
+        orig += "#" + UrlEncode(remarks);
 
       node.originalUrl = orig;
     }
@@ -3460,10 +3465,9 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
   if (nodes.size() >= parallel_threshold) {
     const unsigned int hw = std::thread::hardware_concurrency();
     int worker_cfg = (parse_worker_count > 0)
-                           ? parse_worker_count
-                           : (hw ? static_cast<int>(hw) * 2 : 8);
-    const size_t worker_count =
-        static_cast<size_t>(std::max(2, worker_cfg));
+                         ? parse_worker_count
+                         : (hw ? static_cast<int>(hw) * 2 : 8);
+    const size_t worker_count = static_cast<size_t>(std::max(2, worker_cfg));
     std::atomic<size_t> next_idx{0};
 
     // Result bitmap: 1 = keep, 0 = drop

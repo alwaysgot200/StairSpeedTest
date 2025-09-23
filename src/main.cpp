@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <numeric>
 #include <regex>
 #include <set>
@@ -132,6 +133,13 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
                                     const std::string &testserver, int testport,
                                     const std::string &username,
                                     const std::string &password);
+// 新增：分片准备（分配端口 + 生成并写入聚合 config.json）
+static bool prepareShardConfigAndPorts(const std::vector<nodeInfo *> &shard,
+                                       std::vector<int> &ports);
+// 新增：标准流程的并发测试（sleep->就绪->并发测试->web通知）
+static void testShardWithConcurrency(std::vector<nodeInfo *> &shard,
+                                     const std::vector<int> &ports,
+                                     int concurrency);
 static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
                             int concurrency);
 // 新增：在分片启动失败时，剔除无效节点并返回有效子集
@@ -684,11 +692,6 @@ void saveResult(std::vector<nodeInfo> &nodes) {
     if (!valid)
       continue;
 
-    // record original URL for valid nodes (exclude placeholder "LOG")
-    if (!x.proxyStr.empty() && x.proxyStr != "LOG") {
-      url_lines += x.proxyStr;
-      url_lines += "\n";
-    }
     // 收集原始分享链接（仅在字段非空时）
     if (!x.originalUrl.empty()) {
       original_url_lines += x.originalUrl;
@@ -709,20 +712,11 @@ void saveResult(std::vector<nodeInfo> &nodes) {
     ini.SetArray("RawPing", ",", x.rawPing);
     ini.SetArray("RawSitePing", ",", x.rawSitePing);
     ini.SetArray("RawSpeed", ",", x.rawSpeed);
-  }
 
-  // write valid nodes' URLs to a .urls.txt file alongside the result log
-  if (!url_lines.empty()) {
-    std::string urlPath = resultPath;
-    size_t slash_pos = urlPath.find_last_of("\\/");
-    size_t dot_pos = urlPath.find_last_of('.');
-    if (dot_pos != std::string::npos &&
-        (slash_pos == std::string::npos || dot_pos > slash_pos)) {
-      urlPath.replace(dot_pos, std::string::npos, ".urls.txt");
-    } else {
-      urlPath += ".urls.txt";
+    // 新增：序列化出站国家代码
+    if (!x.outboundCountryCode.empty()) {
+      ini.Set("OutboundCountryCode", x.outboundCountryCode);
     }
-    fileWrite(urlPath, url_lines, true);
   }
 
   // 新增：导出原始分享链接到 .originalUrl.txt
@@ -741,7 +735,104 @@ void saveResult(std::vector<nodeInfo> &nodes) {
 
   ini.ToFile(resultPath);
 }
+void saveResult(const nodeInfo &x) {
+  // 函数内静态互斥锁，用于保护磁盘写入
+  static std::mutex g_save_result_mutex;
+  std::lock_guard<std::mutex> lk(g_save_result_mutex);
 
+  // 只要站点延迟或下载测速任一有结果即视为有效
+  bool has_site_ping = false;
+  if (test_site_ping) {
+    for (int v : x.rawSitePing) {
+      if (v > 0) {
+        has_site_ping = true;
+        break;
+      }
+    }
+  }
+  bool has_download = (speedtest_mode != "pingonly") && (x.totalRecvBytes > 0);
+  bool valid = has_site_ping || has_download;
+
+  if (valid) {
+    std::string content;
+
+    // 如果结果文件尚不存在，先写入 Basic 段（一次性）
+    if (!fileExist(resultPath, false)) {
+      INIReader hdr;
+      hdr.SetCurrentSection("Basic");
+      hdr.Set("Tester", "StairSpeedtest " VERSION);
+      hdr.Set("GenerationTime", getTime(3));
+      content += hdr.ToString();
+    }
+    // 构造本节点的 section 文本并追加
+    INIReader sec;
+    // 将 linkType 映射为协议字符串（小写）
+    auto protoToStr = [](int t) -> std::string {
+      switch (t) {
+      case SPEEDTEST_MESSAGE_FOUNDVMESS:
+        return "vmess";
+      case SPEEDTEST_MESSAGE_FOUNDVLESS:
+        return "vless";
+      case SPEEDTEST_MESSAGE_FOUNDSS:
+        return "ss";
+      case SPEEDTEST_MESSAGE_FOUNDSSR:
+        return "ssr";
+      case SPEEDTEST_MESSAGE_FOUNDTROJAN:
+        return "trojan";
+      case SPEEDTEST_MESSAGE_FOUNDSOCKS:
+        return "socks";
+      case SPEEDTEST_MESSAGE_FOUNDSUB:
+        return "sub";
+      case SPEEDTEST_MESSAGE_FOUNDNETCH:
+        return "netch";
+      case SPEEDTEST_MESSAGE_FOUNDUPD:
+        return "upd";
+      case SPEEDTEST_MESSAGE_FOUNDLOCAL:
+        return "local";
+      default:
+        return "unknown";
+      }
+    };
+    std::string section =
+        protoToStr(x.linkType) + "|" + x.server + "|" + std::to_string(x.port);
+    sec.SetCurrentSection(section);
+    sec.Set("Remarks", x.remarks);
+    sec.Set("AvgPing", x.avgPing);
+    sec.Set("PkLoss", x.pkLoss);
+    sec.Set("SitePing", x.sitePing);
+    sec.Set("AvgSpeed", x.avgSpeed);
+    sec.Set("MaxSpeed", x.maxSpeed);
+    sec.Set("ULSpeed", x.ulSpeed);
+    sec.SetNumber<unsigned long long>("UsedTraffic", x.totalRecvBytes);
+    sec.SetNumber<int>("GroupID", x.groupID);
+    sec.SetNumber<int>("ID", x.id);
+    sec.SetBool("Online", x.online);
+    sec.SetArray("RawPing", ",", x.rawPing);
+    sec.SetArray("RawSitePing", ",", x.rawSitePing);
+    sec.SetArray("RawSpeed", ",", x.rawSpeed);
+    if (!x.outboundCountryCode.empty()) {
+      sec.Set("OutboundCountryCode", x.outboundCountryCode);
+    }
+    content += sec.ToString();
+
+    // 以“追加”方式写入到结果文件
+    fileWrite(resultPath, content, false);
+
+    // 追加原始分享链接
+    if (!x.originalUrl.empty()) {
+      std::string originalPath = resultPath;
+      size_t slash_pos2 = originalPath.find_last_of("\\/");
+      size_t dot_pos2 = originalPath.find_last_of('.');
+      if (dot_pos2 != std::string::npos &&
+          (slash_pos2 == std::string::npos || dot_pos2 > slash_pos2)) {
+        originalPath.replace(dot_pos2, std::string::npos, ".originalUrl.txt");
+      } else {
+        originalPath += ".originalUrl.txt";
+      }
+      fileWrite(originalPath, x.originalUrl + "\n", false);
+    }
+  }
+}
 std::string removeEmoji(const std::string &orig_remark) {
   char emoji_id[2] = {(char)-16, (char)-97};
   std::string remark = orig_remark;
@@ -877,6 +968,8 @@ int singleTest(nodeInfo &node) {
   getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
   if (!webserver_mode) {
     geoIPInfo outbound = node.outboundGeoIP.get();
+    // 新增：把出站 GeoIP 的国家代码写入 nodeinfo
+    node.outboundCountryCode = outbound.country_code;
     if (outbound.organization.size()) {
       writeLog(LOG_TYPE_INFO, "Got outbound ISP: " + outbound.organization +
                                   "  Country code: " + outbound.country_code);
@@ -1007,6 +1100,8 @@ void batchTest(std::vector<nodeInfo> &nodes) {
         onlines++;
       // 显式 push：单个节点完成就推送
       webui_notify_node_tested(*px);
+      // 新增：单节点结果立刻追加保存
+      saveResult(*px);
     }
 
     // 汇总统计
@@ -1020,7 +1115,7 @@ void batchTest(std::vector<nodeInfo> &nodes) {
              "All nodes tested. Total/Online nodes: " +
                  std::to_string(node_count) + "/" + std::to_string(onlines) +
                  " Traffic used: " + speedCalc(tottraffic * 1.0));
-    saveResult(nodes);
+    // saveResult(nodes);
     if (webserver_mode || !multilink) {
       printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
       writeLog(LOG_TYPE_INFO, "Now exporting result...");
@@ -1250,21 +1345,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
   }
   printMsg(SPEEDTEST_MESSAGE_GOTPING, rpcmode, id, node.avgPing, node.pkLoss);
 
-  getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
-
-  if (!webserver_mode) {
-    geoIPInfo outbound = node.outboundGeoIP.get();
-    if (outbound.organization.size()) {
-      writeLog(LOG_TYPE_INFO, "Got outbound ISP: " + outbound.organization +
-                                  "  Country code: " + outbound.country_code);
-      printMsg(SPEEDTEST_MESSAGE_GOTGEOIP, rpcmode, id, outbound.organization,
-               outbound.country_code);
-    } else
-      printMsg(SPEEDTEST_ERROR_GEOIPERR, rpcmode, id);
-    if (test_nat_type)
-      printMsg(SPEEDTEST_MESSAGE_GOTNAT, rpcmode, id, node.natType.get());
-  }
-
+  // 开始测试google时延
   if (test_site_ping) {
     printMsg(SPEEDTEST_MESSAGE_STARTGPING, rpcmode, id);
     writeLog(LOG_TYPE_INFO, "Now performing site ping...");
@@ -1279,8 +1360,10 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
     printMsg(SPEEDTEST_MESSAGE_GOTGPING, rpcmode, id, node.sitePing);
   }
 
+  // 开始测试下载速度
   printMsg(SPEEDTEST_MESSAGE_STARTSPEED, rpcmode, id);
   if (speedtest_mode != "pingonly") {
+    getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
     writeLog(LOG_TYPE_INFO, "Now performing file download speed test...");
     perform_test(node, testserver, testport, username, password,
                  def_thread_count);
@@ -1312,7 +1395,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
   }
   printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed,
            node.maxSpeed);
-
+  // 开始测试上传
   if (test_upload) {
     writeLog(LOG_TYPE_INFO, "Now performing upload speed test...");
     printMsg(SPEEDTEST_MESSAGE_STARTUPD, rpcmode, id);
@@ -1320,19 +1403,20 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
     printMsg(SPEEDTEST_MESSAGE_GOTUPD, rpcmode, id, node.ulSpeed);
   }
 
-  writeLog(LOG_TYPE_INFO,
-           "Average speed: " + node.avgSpeed + "  Max speed: " + node.maxSpeed +
-               "  Upload speed: " + node.ulSpeed + "  Traffic used in bytes: " +
-               std::to_string(node.totalRecvBytes));
-  node.online = true;
-
-  auto end = steady_clock::now();
-  auto lapse = duration_cast<seconds>(end - start);
-  node.duration = lapse.count();
-
   // 关键修复：Web 模式下，确保异步任务在返回前完成，避免被随后 kill 的 v2ray
-  // 进程影响
-  if (webserver_mode) {
+  // 获得IP所属国家区域信息
+  if (!webserver_mode) {
+    geoIPInfo outbound = node.outboundGeoIP.get();
+    if (outbound.organization.size()) {
+      writeLog(LOG_TYPE_INFO, "Got outbound ISP: " + outbound.organization +
+                                  "  Country code: " + outbound.country_code);
+      printMsg(SPEEDTEST_MESSAGE_GOTGEOIP, rpcmode, id, outbound.organization,
+               outbound.country_code);
+    } else
+      printMsg(SPEEDTEST_ERROR_GEOIPERR, rpcmode, id);
+    if (test_nat_type)
+      printMsg(SPEEDTEST_MESSAGE_GOTNAT, rpcmode, id, node.natType.get());
+  } else {
     // 这些 get() 不打印，仅确保数据就绪，防止 /getresults 阻塞
     (void)node.inboundGeoIP.get();
     (void)node.outboundGeoIP.get();
@@ -1340,7 +1424,15 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
       (void)node.natType.get();
     }
   }
-
+  // 开始总结
+  writeLog(LOG_TYPE_INFO,
+           "Average speed: " + node.avgSpeed + "  Max speed: " + node.maxSpeed +
+               "  Upload speed: " + node.ulSpeed + "  Traffic used in bytes: " +
+               std::to_string(node.totalRecvBytes));
+  node.online = true;
+  auto end = steady_clock::now();
+  auto lapse = duration_cast<seconds>(end - start);
+  node.duration = lapse.count();
   sleep(300);
   return SPEEDTEST_ERROR_NONE;
 }
@@ -1447,26 +1539,91 @@ static std::vector<nodeInfo *> getValidNodes(std::vector<nodeInfo *> &shard) {
                " of " + std::to_string(shard.size()));
   return valid;
 }
+// 新增：分片准备（分配端口 + 生成并写入聚合 config.json）
+static bool prepareShardConfigAndPorts(const std::vector<nodeInfo *> &shard,
+                                       std::vector<int> &ports) {
+  // 1) 分配端口
+  ports = allocateShardPorts(shard.size(), socksport);
+  if (ports.size() != shard.size()) {
+    writeLog(LOG_TYPE_ERROR,
+             "Insufficient local ports for shard. Mark shard nodes as failed.");
+    return false;
+  }
 
+  // 2) 生成 items -> 构建聚合配置
+  std::vector<std::pair<nodeInfo *, int>> items;
+  items.reserve(shard.size());
+  for (size_t k = 0; k < shard.size(); ++k) {
+    items.emplace_back(shard[k], ports[k]);
+  }
+  std::string config = buildAggregatedV2RayConfig(items);
+
+  // 3) 写盘（config.json）
+  writeLog(LOG_TYPE_INFO, "Writing aggregated config file...");
+  fileWrite("config.json", config, true);
+  return true;
+}
+
+// 新增：标准流程的并发测试（sleep->就绪->并发测试->web通知）
+static void testShardWithConcurrency(std::vector<nodeInfo *> &shard,
+                                     const std::vector<int> &ports,
+                                     int concurrency) {
+  // 给入站监听一个极短就绪窗口，避免竞态误判
+  sleep(300);
+
+  // 等待端口就绪（最多 3s），未就绪标为失败并推送
+  std::vector<size_t> ready_indices;
+  ready_indices.reserve(shard.size());
+  for (size_t k = 0; k < shard.size(); ++k) {
+    int p = ports[k];
+    if (waitUntilSocksReady(socksaddr, p, "", "", 3000)) {
+      ready_indices.push_back(k);
+    } else {
+      writeLog(LOG_TYPE_WARN, "SOCKS inbound seems not ready at " + socksaddr +
+                                  ":" + std::to_string(p) +
+                                  " after waiting. Mark as failed.");
+      shard[k]->online = false;
+      webui_notify_node_tested(*shard[k]);
+    }
+  }
+  if (ready_indices.empty()) {
+    writeLog(LOG_TYPE_WARN, "No ready inbound ports in this shard.");
+    return;
+  }
+
+  // 控制并发度的并发测试 + web 通知
+  std::vector<std::future<void>> futures;
+  for (auto idx : ready_indices) {
+    while (futures.size() >= (size_t)concurrency) {
+      futures.front().get();
+      futures.erase(futures.begin());
+    }
+    nodeInfo *n = shard[idx];
+    int p = ports[idx];
+    futures.emplace_back(std::async(std::launch::async, [n, p]() {
+      testNodeViaPreparedSocks(*n, socksaddr, p, "", "");
+      webui_notify_node_tested(*n);
+      // 新增：单节点结果立刻追加保存（并发环境下有互斥保护）
+      saveResult(*n);
+    }));
+  }
+  for (auto &f : futures)
+    f.get();
+}
 // 新增：对某协议分组（VMESS 或 VLESS）进行“分片 + 单进程 v2ray 并发测试”
 static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
                             int concurrency) {
   if (group.empty())
     return;
 
-  // 分片迭代
+  // 分片迭代：严格 1→2→3→4→5 流程
   for (size_t i = 0; i < group.size(); i += shard_size) {
     size_t j_end = std::min(group.size(), i + (size_t)shard_size);
     std::vector<nodeInfo *> shard(group.begin() + i, group.begin() + j_end);
 
-    // 为该分片分配本地端口
-    auto ports = allocateShardPorts(shard.size(), socksport);
-
-    // 新增：端口数量校验，避免后续越界/错配
-    if (ports.size() != shard.size()) {
-      writeLog(
-          LOG_TYPE_ERROR,
-          "Insufficient local ports for shard. Mark shard nodes as failed.");
+    // (1) 分配端口并生成/写入配置文件
+    std::vector<int> ports;
+    if (!prepareShardConfigAndPorts(shard, ports)) {
       for (auto *n : shard) {
         n->online = false;
         webui_notify_node_tested(*n);
@@ -1474,21 +1631,10 @@ static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
       continue; // 下一个分片
     }
 
-    // 生成 items 列表 (node*, port)
-    std::vector<std::pair<nodeInfo *, int>> items;
-    items.reserve(shard.size());
-    for (size_t k = 0; k < shard.size(); ++k) {
-      items.emplace_back(shard[k], ports[k]);
-    }
-
-    // 写聚合配置并启动 v2ray
-    std::string config = buildAggregatedV2RayConfig(items);
-    writeLog(LOG_TYPE_INFO, "Writing aggregated config file...");
-    fileWrite("config.json", config, true);
-
+    // (2) 启动客户端
     bool ok = runClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
     if (!ok) {
-      // 调用：定位并剔除无效节点（解析出站失败等）
+      // (3) 启动失败：剔除失败节点，得到正常节点集合
       auto shard_valid = getValidNodes(shard);
       if (shard_valid.empty()) {
         writeLog(LOG_TYPE_ERROR,
@@ -1500,136 +1646,41 @@ static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
         continue; // 下一个分片
       }
 
-      // 为有效子集分配端口
-      auto ports2 = allocateShardPorts(shard_valid.size(), socksport);
-      if (ports2.size() < shard_valid.size()) {
-        writeLog(LOG_TYPE_ERROR, "Insufficient local ports for valid subset. "
-                                 "Mark subset as failed.");
+      // (4) 对有效子集：重新分配端口+生成/写入配置文件，然后再次启动
+      std::vector<int> ports2;
+      if (!prepareShardConfigAndPorts(shard_valid, ports2)) {
         for (auto *n : shard_valid) {
           n->online = false;
           webui_notify_node_tested(*n);
         }
         continue;
       }
-
-      // 对有效子集重写聚合配置并重新启动
-      std::vector<std::pair<nodeInfo *, int>> items2;
-      items2.reserve(shard_valid.size());
-      for (size_t k = 0; k < shard_valid.size(); ++k) {
-        items2.emplace_back(shard_valid[k], ports2[k]);
-      }
-      std::string config2 = buildAggregatedV2RayConfig(items2);
-      writeLog(LOG_TYPE_INFO,
-               "Rewriting aggregated config file for valid subset...");
-      fileWrite("config.json", config2, true);
 
       bool ok2 = runClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
       if (!ok2) {
-        writeLog(LOG_TYPE_ERROR, "Client startup still failed after removing "
-                                 "invalid nodes. Mark subset nodes as failed.");
+        writeLog(LOG_TYPE_ERROR,
+                 "Client startup still failed after removing invalid nodes. "
+                 "Mark subset nodes as failed.");
         for (auto *n : shard_valid) {
           n->online = false;
           webui_notify_node_tested(*n);
         }
-        continue;
-      } else {
-        // 同样在成功后短暂等待，保证入站监听就绪
-        sleep(300);
+        continue; // 下一个分片
       }
 
-      // 等待入站端口就绪（延长等待 5s，并只保留就绪的节点）
-      std::vector<size_t> ready_indices2;
-      ready_indices2.reserve(shard_valid.size());
-      for (size_t k = 0; k < shard_valid.size(); ++k) {
-        int p = ports2[k];
-        if (waitUntilSocksReady(socksaddr, p, "", "", 5000)) {
-          ready_indices2.push_back(k);
-        } else {
-          writeLog(LOG_TYPE_WARN, "SOCKS inbound seems not ready at " +
-                                      socksaddr + ":" + std::to_string(p) +
-                                      " after waiting. Mark as failed.");
-          shard_valid[k]->online = false;
-          webui_notify_node_tested(*shard_valid[k]);
-        }
-      }
+      // (5) 标准流程：sleep->端口就绪->并发测试->汇集输出
+      testShardWithConcurrency(shard_valid, ports2, concurrency);
 
-      if (ready_indices2.empty()) {
-        // 没有任何端口就绪，直接结束本次分片测试
-        killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
-        sleep(200);
-        continue;
-      }
-
-      // 并发测试有效且已就绪的子集
-      std::vector<std::future<void>> futures2;
-      for (auto idx : ready_indices2) {
-        while (futures2.size() >= (size_t)concurrency) {
-          futures2.front().get();
-          futures2.erase(futures2.begin());
-        }
-        nodeInfo *n = shard_valid[idx];
-        int p = ports2[idx];
-        futures2.emplace_back(std::async(std::launch::async, [n, p]() {
-          testNodeViaPreparedSocks(*n, socksaddr, p, "", "");
-          webui_notify_node_tested(*n);
-        }));
-      }
-      for (auto &f : futures2)
-        f.get();
-
-      // 终止 v2ray 进程
+      // 终止客户端
       killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
       sleep(200);
       continue; // 下一个分片
-    } else {
-      // runClient 成功后，给入站监听一个极短的就绪窗口，避免竞态误判
-      sleep(300);
     }
 
-    // 等待所有入站端口就绪（延长等待 5s），仅测试已就绪的
-    std::vector<size_t> ready_indices;
-    ready_indices.reserve(shard.size());
-    for (size_t k = 0; k < shard.size(); ++k) {
-      int p = ports[k];
-      if (waitUntilSocksReady(socksaddr, p, "", "", 5000)) {
-        ready_indices.push_back(k);
-      } else {
-        writeLog(LOG_TYPE_WARN, "SOCKS inbound seems not ready at " +
-                                    socksaddr + ":" + std::to_string(p) +
-                                    " after waiting. Mark as failed.");
-        shard[k]->online = false;
-        webui_notify_node_tested(*shard[k]);
-      }
-    }
+    // 初次启动成功：(5) 标准流程：sleep->端口就绪->并发测试->汇集输出
+    testShardWithConcurrency(shard, ports, concurrency);
 
-    if (ready_indices.empty()) {
-      // 没有任何端口就绪，直接结束本次分片
-      killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
-      sleep(200);
-      continue;
-    }
-
-    // 并发测试（仅已就绪）
-    std::vector<std::future<void>> futures;
-    for (auto idx : ready_indices) {
-      // 控制并发度
-      while (futures.size() >= (size_t)concurrency) {
-        futures.front().get();
-        futures.erase(futures.begin());
-      }
-      nodeInfo *n = shard[idx];
-      int p = ports[idx];
-      futures.emplace_back(std::async(std::launch::async, [n, p]() {
-        testNodeViaPreparedSocks(*n, socksaddr, p, "", "");
-        // 显式 push：严格按完成顺序追加
-        webui_notify_node_tested(*n);
-      }));
-    }
-    // 收尾等待
-    for (auto &f : futures)
-      f.get();
-
-    // 终止 v2ray 进程
+    // 终止客户端
     killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
     sleep(200);
   }
