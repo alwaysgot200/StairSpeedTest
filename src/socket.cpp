@@ -290,16 +290,21 @@ std::string hostnameToIPAddr(std::string host)
 int connectSocks5(SOCKET sHost, std::string username, std::string password)
 {
     char buf[BUF_SIZE], bufRecv[BUF_SIZE];
-    //ZeroMemory(buf, BUF_SIZE);
     char* ptr;
     ptr = buf;
-    PUT_BYTE(ptr++, 5); //socks5
-    PUT_BYTE(ptr++, 2); //2 auth methods
-    PUT_BYTE(ptr++, 0); //no auth
-    PUT_BYTE(ptr++, 2); //user pass auth
+    PUT_BYTE(ptr++, 5); // socks5
+
+    // 根据是否有凭据，宣告可接受的认证方法
+    if (!username.empty() || !password.empty()) {
+        PUT_BYTE(ptr++, 2); // 2 auth methods
+        PUT_BYTE(ptr++, 0); // no auth
+        PUT_BYTE(ptr++, 2); // user/pass auth
+    } else {
+        PUT_BYTE(ptr++, 1); // 仅 1 种方法
+        PUT_BYTE(ptr++, 0); // no auth
+    }
     Send(sHost, buf, ptr - buf, 0);
     ZeroMemory(bufRecv, BUF_SIZE);
-    // 原来是 Recv(sHost, bufRecv, 2, 0); 无校验，这里确保完整读到 2 字节
     int need = 2, got = 0;
     while (got < need) {
         int r = Recv(sHost, bufRecv + got, need - got, 0);
@@ -316,15 +321,13 @@ int connectSocks5(SOCKET sHost, std::string username, std::string password)
     {
     case SOCKS5_AUTH_REJECT:
         std::cerr << "socks5: no acceptable authentication method\n" << std::endl;
-        return -1;                              // fail
+        return -1;
 
     case SOCKS5_AUTH_NOAUTH:
-        // nothing to do
         auth_result = 0;
         break;
 
     case SOCKS5_AUTH_USERPASS:
-        // do user/pass auth
         auth_result = socks5_do_auth_userpass(sHost, username, password);
         break;
 

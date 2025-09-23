@@ -2,6 +2,65 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "C/C++ Debug (gdb Attach - local)",
+      "type": "cppdbg",
+      "request": "attach",
+      "program": "${workspaceFolder}/build/bin/stairspeedtest.exe",
+      "processId": "${command:pickProcess}",
+      "MIMode": "gdb",
+      "miDebuggerPath": "${env:MSYS2_ROOT}/mingw64/bin/gdb.exe",
+      "miDebuggerArgs": "--interpreter=mi2",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        { "text": "catch throw" },
+        { "text": "set breakpoint pending on" }
+      ],
+      "logging": {
+        "engineLogging": false,
+        "trace": false,
+        "traceResponse": false
+      }
+    },
+    {
+      "name": "Debug (gdb local, external console)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/stairspeedtest.exe",
+      "cwd": "${workspaceFolder}/build/bin",
+      "MIMode": "gdb",
+      "miDebuggerPath": "${env:MSYS2_ROOT}/mingw64/bin/gdb.exe",
+      "miDebuggerArgs": "--interpreter=mi2",
+      "launchCompleteCommand": "exec-run",
+      "externalConsole": true,
+      "environment": [
+        { "name": "MSYSTEM", "value": "MINGW64" },
+        { "name": "MSYS2_PATH_TYPE", "value": "inherit" },
+        {
+          "name": "PATH",
+          "value": "${env:MSYS2_ROOT}/cmakeproxy;${env:MSYS2_ROOT}/mingw64/bin;${env:MSYS2_ROOT}/usr/bin;${env:MSYS2_ROOT}/bin;${env:PATH}"
+        }
+      ],
+      "preLaunchTask": "Rebuild (Debug)",
+      "stopAtEntry": false,
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        { "text": "catch throw" }
+      ],
+      "logging": {
+        "engineLogging": false,
+        "trace": false,
+        "traceResponse": false
+      }
+    },
+    {
       "name": "Debug (gdb via MSYS2 bash)",
       "type": "cppdbg",
       "request": "launch",

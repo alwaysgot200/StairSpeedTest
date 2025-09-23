@@ -157,7 +157,7 @@ rules=...（根据 ISP/域名等规则挑选测试 URL）
 
 - 如果你测的是 vmess/ss/ssr/trojan 等协议，程序会尝试启动对应客户端（从 `tools\clients` 查找）：- v2ray.exe、ss-local.exe、ssr-local.exe、trojan.exe
 - 不存在时会提示未找到，相关协议将无法自动起客户端（socks 链接不受影响）
-- 程序会使用本地 SOCKS 端口（默认 65432，自动避让占用）
+- 程序会使用本地 SOCKS 端口（默认 32768 ，自动避让占用）
 - 如果在 CMD/PowerShell 下运行遇到“缺少 DLL”之类的启动错误：
 - 方案 1：在 MSYS2 MINGW64 终端运行 exe
 - 方案 2：把需要的 DLL（如 libnghttp2、libidn2、libunistring、zstd、zlib、brotli 等）放到 根 目录，或把 MINGW64\bin 加到 PATH

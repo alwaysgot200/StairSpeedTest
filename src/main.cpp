@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iomanip>
 #include <iostream>
@@ -47,7 +48,7 @@ bool pause_on_done = true;
 
 // for use globally
 bool multilink = false;
-int socksport = 65432;
+int socksport = 32768;
 std::string socksaddr = "127.0.0.1";
 std::string custom_group;
 std::string pngpath;
@@ -133,6 +134,8 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
                                     const std::string &password);
 static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
                             int concurrency);
+// 新增：在分片启动失败时，剔除无效节点并返回有效子集
+static std::vector<nodeInfo *> getValidNodes(std::vector<nodeInfo *> &shard);
 
 static inline int to_int(const char *s) {
   if (!s)
@@ -274,9 +277,21 @@ bool runClient(int client) {
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    // 先对磁盘配置做预检，失败则不启动
+    if (!testV2RayConfigFile("config.json", "")) {
+      writeLog(LOG_TYPE_ERROR,
+               "v2ray config.json validation failed (-test). Abort start.");
+      return false;
+    }
     return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDVLESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    // 同样进行预检
+    if (!testV2RayConfigFile("config.json", "")) {
+      writeLog(LOG_TYPE_ERROR,
+               "v2ray config.json validation failed (-test). Abort start.");
+      return false;
+    }
     return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDSSR:
     if (ssr_libev) {
@@ -314,9 +329,21 @@ bool runClient(int client) {
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    // 先对磁盘配置做预检，失败则不启动
+    if (!testV2RayConfigFile("config.json", "")) {
+      writeLog(LOG_TYPE_ERROR,
+               "v2ray config.json validation failed (-test). Abort start.");
+      return false;
+    }
     return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDVLESS:
     writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    // 同样进行预检
+    if (!testV2RayConfigFile("config.json", "")) {
+      writeLog(LOG_TYPE_ERROR,
+               "v2ray config.json validation failed (-test). Abort start.");
+      return false;
+    }
     return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDSSR:
     writeLog(LOG_TYPE_INFO, "Starting up shadowsocksr-libev...");
@@ -336,7 +363,7 @@ bool runClient(int client) {
 static bool waitUntilSocksReady(const std::string &addr, int port,
                                 const std::string &username,
                                 const std::string &password,
-                                int timeout_ms = 8000) {
+                                int timeout_ms = 1000) {
   using namespace std::chrono;
   auto deadline = steady_clock::now() + milliseconds(timeout_ms);
 
@@ -344,7 +371,7 @@ static bool waitUntilSocksReady(const std::string &addr, int port,
     SOCKET s = initSocket(getNetworkType(addr), SOCK_STREAM, IPPROTO_TCP);
     if (s != INVALID_SOCKET) {
       if (startConnect(s, addr, port) != SOCKET_ERROR) {
-        setTimeout(s, 1000);
+        setTimeout(s, 700);
         // Try a full SOCKS5 method negotiation; success indicates inbound is
         // ready
         if (connectSocks5(s, username, password) == 0) {
@@ -728,8 +755,8 @@ std::string removeEmoji(const std::string &orig_remark) {
     return orig_remark;
   return remark;
 }
-// test one kind of protocal node
-int singleProtocalTest(nodeInfo &node) {
+// test one node
+int singleTest(nodeInfo &node) {
   node.remarks = trim(removeEmoji(node.remarks)); // remove all emojis
   int retVal = 0;
   std::string logdata, testserver, username, password, proxy;
@@ -974,7 +1001,7 @@ void batchTest(std::vector<nodeInfo> &nodes) {
 
     // 其他协议（保持现有串行逻辑）
     for (auto *px : other_nodes) {
-      singleProtocalTest(*px);
+      singleTest(*px);
       tottraffic += px->totalRecvBytes;
       if (px->online)
         onlines++;
@@ -1137,11 +1164,20 @@ static std::vector<int> allocateShardPorts(size_t count, int start_hint_port) {
   int hint = start_hint_port;
   for (size_t i = 0; i < count; ++i) {
     int p = checkPort(hint);
-    // 简单去重保护
+    if (p == -1) {
+      // 已经从 hint 向上扫到 65535 都不可用，停止分配
+      break;
+    }
+    // 去重保护：避免重复使用端口
     while (used.count(p)) {
       hint = p + 1;
       p = checkPort(hint);
+      if (p == -1)
+        break;
     }
+    if (p == -1)
+      break;
+
     ports.push_back(p);
     used.insert(p);
     hint = p + 1;
@@ -1309,6 +1345,109 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
   return SPEEDTEST_ERROR_NONE;
 }
 
+static bool tryStartSubsetViaStdin(const std::vector<nodeInfo *> &subset,
+                                   const std::vector<int> &ports) {
+  if (subset.empty() || subset.size() != ports.size())
+    return false;
+
+  // 构造 items 并生成聚合配置（内存）
+  std::vector<std::pair<nodeInfo *, int>> items;
+  items.reserve(subset.size());
+  for (size_t i = 0; i < subset.size(); ++i) {
+    items.emplace_back(subset[i], ports[i]);
+  }
+  std::string config = buildAggregatedV2RayConfig(items);
+
+  // 先做 -test 预检（stdin），失败则直接返回 false
+  if (!testV2RayConfigStdin(config, "")) {
+    writeLog(LOG_TYPE_ERROR,
+             "Aggregated v2ray config (-test) failed. Subset cannot start.");
+    return false;
+  }
+
+  // 使用 stdin 喂给 v2ray（免写盘，若不可用则在辅助函数中回退写盘）
+  bool ok = runV2RayWithConfigStdin(config, "");
+  if (!ok)
+    return false;
+
+  // 等待每个入站端口就绪（若有任何一个未就绪，视为失败）
+  bool ready = true;
+  for (auto p : ports) {
+    if (!waitUntilSocksReady(socksaddr, p, "", "", 2000)) {
+      ready = false;
+      break;
+    }
+  }
+
+  // 无论成功失败都终止子进程
+  killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+  sleep(200);
+
+  return ready;
+}
+
+// 二分递归：找出所有有效节点（无效节点设置 online=false 并推送）
+static std::vector<nodeInfo *> getValidNodes(std::vector<nodeInfo *> &shard) {
+  writeLog(LOG_TYPE_WARN,
+           "Client startup failed. Trying to locate invalid nodes by "
+           "divide-and-conquer...");
+
+  std::function<std::vector<nodeInfo *>(const std::vector<nodeInfo *> &)>
+      filter_valid =
+          [&](const std::vector<nodeInfo *> &nodes) -> std::vector<nodeInfo *> {
+    if (nodes.empty())
+      return {};
+
+    // 为当前子集临时分配端口
+    auto ports = allocateShardPorts(nodes.size(), socksport);
+    if (ports.size() != nodes.size()) {
+      writeLog(LOG_TYPE_ERROR,
+               "No enough local ports for subset testing. Mark subset failed.");
+      // 端口不足时，保守地全部标记为失败
+      for (auto *n : nodes) {
+        n->online = false;
+        webui_notify_node_tested(*n);
+      }
+      return {};
+    }
+
+    if (tryStartSubsetViaStdin(nodes, ports)) {
+      // 整体子集可以启动，全部有效
+      return nodes;
+    }
+
+    // 子集整体无法启动：若仅一个节点，标记无效并推送
+    if (nodes.size() == 1) {
+      nodeInfo *bad = nodes[0];
+      bad->online = false;
+      writeLog(LOG_TYPE_ERROR,
+               "Located invalid node id=" + std::to_string(bad->id) + " (" +
+                   bad->remarks + ")");
+      webui_notify_node_tested(*bad);
+      return {};
+    }
+
+    // 分治：左右子集分别判定
+    size_t mid = nodes.size() / 2;
+    std::vector<nodeInfo *> left(nodes.begin(), nodes.begin() + mid);
+    std::vector<nodeInfo *> right(nodes.begin() + mid, nodes.end());
+
+    auto valid_left = filter_valid(left);
+    auto valid_right = filter_valid(right);
+
+    // 合并有效子集
+    valid_left.insert(valid_left.end(), valid_right.begin(), valid_right.end());
+    return valid_left;
+  };
+
+  auto valid = filter_valid(shard);
+  size_t removed = shard.size() - valid.size();
+  writeLog(LOG_TYPE_WARN,
+           "Invalid nodes removed from shard: " + std::to_string(removed) +
+               " of " + std::to_string(shard.size()));
+  return valid;
+}
+
 // 新增：对某协议分组（VMESS 或 VLESS）进行“分片 + 单进程 v2ray 并发测试”
 static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
                             int concurrency) {
@@ -1322,6 +1461,18 @@ static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
 
     // 为该分片分配本地端口
     auto ports = allocateShardPorts(shard.size(), socksport);
+
+    // 新增：端口数量校验，避免后续越界/错配
+    if (ports.size() != shard.size()) {
+      writeLog(
+          LOG_TYPE_ERROR,
+          "Insufficient local ports for shard. Mark shard nodes as failed.");
+      for (auto *n : shard) {
+        n->online = false;
+        webui_notify_node_tested(*n);
+      }
+      continue; // 下一个分片
+    }
 
     // 生成 items 列表 (node*, port)
     std::vector<std::pair<nodeInfo *, int>> items;
@@ -1337,39 +1488,137 @@ static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
 
     bool ok = runClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
     if (!ok) {
-      writeLog(
-          LOG_TYPE_ERROR,
-          "Client startup failed. Please check config.json and client binary.");
-      for (auto *n : shard) {
-        // 简单标记失败
-        n->online = false;
-        // 显式
-        // push：即使分片启动失败，也把节点作为失败项推送到结果，保证“有东西可看”
-        webui_notify_node_tested(*n);
+      // 调用：定位并剔除无效节点（解析出站失败等）
+      auto shard_valid = getValidNodes(shard);
+      if (shard_valid.empty()) {
+        writeLog(LOG_TYPE_ERROR,
+                 "Shard has no valid nodes after removal. Mark all as failed.");
+        for (auto *n : shard) {
+          n->online = false;
+          webui_notify_node_tested(*n);
+        }
+        continue; // 下一个分片
       }
-      continue; // 继续下一个分片
+
+      // 为有效子集分配端口
+      auto ports2 = allocateShardPorts(shard_valid.size(), socksport);
+      if (ports2.size() < shard_valid.size()) {
+        writeLog(LOG_TYPE_ERROR, "Insufficient local ports for valid subset. "
+                                 "Mark subset as failed.");
+        for (auto *n : shard_valid) {
+          n->online = false;
+          webui_notify_node_tested(*n);
+        }
+        continue;
+      }
+
+      // 对有效子集重写聚合配置并重新启动
+      std::vector<std::pair<nodeInfo *, int>> items2;
+      items2.reserve(shard_valid.size());
+      for (size_t k = 0; k < shard_valid.size(); ++k) {
+        items2.emplace_back(shard_valid[k], ports2[k]);
+      }
+      std::string config2 = buildAggregatedV2RayConfig(items2);
+      writeLog(LOG_TYPE_INFO,
+               "Rewriting aggregated config file for valid subset...");
+      fileWrite("config.json", config2, true);
+
+      bool ok2 = runClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+      if (!ok2) {
+        writeLog(LOG_TYPE_ERROR, "Client startup still failed after removing "
+                                 "invalid nodes. Mark subset nodes as failed.");
+        for (auto *n : shard_valid) {
+          n->online = false;
+          webui_notify_node_tested(*n);
+        }
+        continue;
+      } else {
+        // 同样在成功后短暂等待，保证入站监听就绪
+        sleep(300);
+      }
+
+      // 等待入站端口就绪（延长等待 5s，并只保留就绪的节点）
+      std::vector<size_t> ready_indices2;
+      ready_indices2.reserve(shard_valid.size());
+      for (size_t k = 0; k < shard_valid.size(); ++k) {
+        int p = ports2[k];
+        if (waitUntilSocksReady(socksaddr, p, "", "", 5000)) {
+          ready_indices2.push_back(k);
+        } else {
+          writeLog(LOG_TYPE_WARN, "SOCKS inbound seems not ready at " +
+                                      socksaddr + ":" + std::to_string(p) +
+                                      " after waiting. Mark as failed.");
+          shard_valid[k]->online = false;
+          webui_notify_node_tested(*shard_valid[k]);
+        }
+      }
+
+      if (ready_indices2.empty()) {
+        // 没有任何端口就绪，直接结束本次分片测试
+        killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+        sleep(200);
+        continue;
+      }
+
+      // 并发测试有效且已就绪的子集
+      std::vector<std::future<void>> futures2;
+      for (auto idx : ready_indices2) {
+        while (futures2.size() >= (size_t)concurrency) {
+          futures2.front().get();
+          futures2.erase(futures2.begin());
+        }
+        nodeInfo *n = shard_valid[idx];
+        int p = ports2[idx];
+        futures2.emplace_back(std::async(std::launch::async, [n, p]() {
+          testNodeViaPreparedSocks(*n, socksaddr, p, "", "");
+          webui_notify_node_tested(*n);
+        }));
+      }
+      for (auto &f : futures2)
+        f.get();
+
+      // 终止 v2ray 进程
+      killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+      sleep(200);
+      continue; // 下一个分片
+    } else {
+      // runClient 成功后，给入站监听一个极短的就绪窗口，避免竞态误判
+      sleep(300);
     }
 
-    // 等待所有入站端口就绪
-    for (auto p : ports) {
-      if (!waitUntilSocksReady(socksaddr, p, "", "", 2000)) {
-        writeLog(LOG_TYPE_WARN,
-                 "SOCKS inbound seems not ready at " + socksaddr + ":" +
-                     std::to_string(p) +
-                     " after waiting. Will continue and may fail.");
-      }
-    }
-
-    // 并发测试
-    std::vector<std::future<void>> futures;
+    // 等待所有入站端口就绪（延长等待 5s），仅测试已就绪的
+    std::vector<size_t> ready_indices;
+    ready_indices.reserve(shard.size());
     for (size_t k = 0; k < shard.size(); ++k) {
+      int p = ports[k];
+      if (waitUntilSocksReady(socksaddr, p, "", "", 5000)) {
+        ready_indices.push_back(k);
+      } else {
+        writeLog(LOG_TYPE_WARN, "SOCKS inbound seems not ready at " +
+                                    socksaddr + ":" + std::to_string(p) +
+                                    " after waiting. Mark as failed.");
+        shard[k]->online = false;
+        webui_notify_node_tested(*shard[k]);
+      }
+    }
+
+    if (ready_indices.empty()) {
+      // 没有任何端口就绪，直接结束本次分片
+      killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+      sleep(200);
+      continue;
+    }
+
+    // 并发测试（仅已就绪）
+    std::vector<std::future<void>> futures;
+    for (auto idx : ready_indices) {
       // 控制并发度
       while (futures.size() >= (size_t)concurrency) {
         futures.front().get();
         futures.erase(futures.begin());
       }
-      nodeInfo *n = shard[k];
-      int p = ports[k];
+      nodeInfo *n = shard[idx];
+      int p = ports[idx];
       futures.emplace_back(std::async(std::launch::async, [n, p]() {
         testNodeViaPreparedSocks(*n, socksaddr, p, "", "");
         // 显式 push：严格按完成顺序追加
@@ -1678,6 +1927,10 @@ int main(int argc, char *argv[]) {
 #endif // __APPLE__
   clientCheck();
   socksport = checkPort(socksport);
+  if (socksport == -1) {
+    writeLog(LOG_TYPE_ERROR, "No available local port starting from 32768.");
+    return -1;
+  }
   writeLog(LOG_TYPE_INFO, "Using local port: " + std::to_string(socksport));
   writeLog(LOG_TYPE_INFO, "Init completed.");
   // intro message
@@ -1773,7 +2026,7 @@ int main(int argc, char *argv[]) {
   } else if (allNodes.size() == 1) {
     writeLog(LOG_TYPE_INFO, "Speedtest will now begin.");
     printMsg(SPEEDTEST_MESSAGE_BEGIN, rpcmode);
-    singleProtocalTest(allNodes[0]);
+    singleTest(allNodes[0]);
     if (single_test_force_export) {
       printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
       writeLog(LOG_TYPE_INFO, "Now exporting result...");

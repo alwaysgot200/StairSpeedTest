@@ -7,6 +7,13 @@ int chkProgram(std::string command);
 bool runProgram(std::string command, std::string runpath, bool wait);
 void killByHandle();
 bool killProgram(std::string program);
+// Provide Windows stdin-based v2ray runner (declaration)
+bool runV2RayWithConfigStdin(const std::string &config_json,
+                             const std::string &runpath);
+bool testV2RayConfigFile(const std::string &config_path,
+                         const std::string &runpath);
+bool testV2RayConfigStdin(const std::string &config_json,
+                          const std::string &runpath);
 /*
 class Runner
 {
