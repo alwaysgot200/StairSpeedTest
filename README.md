@@ -88,8 +88,7 @@ Supported proxy types:
 
 - 对于 ss/trojan/socks 增加并发支持
 - 增加对 hy2 的支持，引用 singbox
-- 处理 getinvalidnode, 剔除无效节点算法
-- 增加对 netflex/gemini 探测分类
+- 增加对 netflex/gemini 探测，分类输出文件
 
 ---
 
@@ -166,11 +165,10 @@ rules=...（根据 ISP/域名等规则挑选测试 URL）
 
 交互运行（运行后粘贴订阅）
 .\stairspeedtest.exe
-指定订阅 URL 并设置分组
+指定订阅 URL 或者路径并设置分组
 .\stairspeedtest.exe /u "https://example.com/sub.txt" /g "我的分组"
+.\stairspeedtest.exe /u "C:\sub.txt"
 启动内置 WebServer
 .\stairspeedtest.exe /web
 一键 WebServer（脚本）
 .\webserver.bat
-旧版 WebGUI（脚本）
-.\webgui.bat

@@ -81,6 +81,7 @@ std::string override_conf_port = "";
 std::string export_color_style = "rainbow";
 int def_thread_count = 4;
 bool export_with_maxspeed = false;
+bool export_picture = false;
 bool export_as_new_style = true;
 bool test_site_ping = true;
 bool test_upload = false;
@@ -533,6 +534,7 @@ void readConf(std::string path) {
 
   ini.EnterSection("export");
   ini.GetBoolIfExist("export_with_maxspeed", export_with_maxspeed);
+  ini.GetBoolIfExist("export_picture", export_picture);
   ini.GetIfExist("export_sort_method", export_sort_method);
   ini.GetBoolIfExist("multilink_export_as_one_image",
                      multilink_export_as_one_image);
@@ -1116,7 +1118,7 @@ void batchTest(std::vector<nodeInfo> &nodes) {
                  std::to_string(node_count) + "/" + std::to_string(onlines) +
                  " Traffic used: " + speedCalc(tottraffic * 1.0));
     // saveResult(nodes);
-    if (webserver_mode || !multilink) {
+    if (export_picture && (webserver_mode || !multilink)) {
       printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
       writeLog(LOG_TYPE_INFO, "Now exporting result...");
       pngpath = exportRender(resultPath, nodes, export_with_maxspeed,
@@ -2031,46 +2033,50 @@ int main(int argc, char *argv[]) {
   {
     batchTest(allNodes);
     if (multilink) {
-      if (multilink_export_as_one_image) {
-        printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
-        writeLog(LOG_TYPE_INFO, "Now exporting result...");
-        curPNGPath =
-            replace_all_distinct(resultPath, ".log", "") + "-multilink-all.png";
-        pngpath = exportRender(curPNGPath, allNodes, export_with_maxspeed,
-                               export_sort_method, export_color_style,
-                               export_as_new_style, test_nat_type);
-        printMsg(SPEEDTEST_MESSAGE_PICSAVED, rpcmode, pngpath);
-        writeLog(LOG_TYPE_INFO, "Result saved to " + pngpath + " .");
-        if (rpcmode)
-          printMsg(SPEEDTEST_MESSAGE_PICDATA, rpcmode,
-                   "data:image/png;base64," + fileToBase64(pngpath));
-      } else {
-        printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
-        curPNGPathPrefix = replace_all_distinct(resultPath, ".log", "");
-        for (int i = 0; i < curGroupID; i++) {
-          eraseElements(nodes);
-          copyNodesWithGroupID(allNodes, nodes, i);
-          if (!nodes.size())
-            break;
-          if ((nodes.size() == 1 && single_test_force_export) ||
-              nodes.size() > 1) {
-            printMsg(SPEEDTEST_MESSAGE_PICSAVINGMULTI, rpcmode,
-                     std::to_string(i + 1));
-            writeLog(LOG_TYPE_INFO, "Now exporting result for group " +
-                                        std::to_string(i + 1) + "...");
-            curPNGPath = curPNGPathPrefix + "-multilink-group" +
-                         std::to_string(i + 1) + ".png";
-            pngpath = exportRender(curPNGPath, nodes, export_with_maxspeed,
-                                   export_sort_method, export_color_style,
-                                   export_as_new_style, test_nat_type);
-            printMsg(SPEEDTEST_MESSAGE_PICSAVEDMULTI, rpcmode,
-                     std::to_string(i + 1), pngpath);
-            writeLog(LOG_TYPE_INFO, "Group " + std::to_string(i + 1) +
-                                        " result saved to " + pngpath + " .");
-          } else
-            writeLog(LOG_TYPE_INFO, "Group " + std::to_string(i + 1) +
-                                        " result export skipped.");
+      if (export_picture) {
+        if (multilink_export_as_one_image) {
+          printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
+          writeLog(LOG_TYPE_INFO, "Now exporting result...");
+          curPNGPath = replace_all_distinct(resultPath, ".log", "") +
+                       "-multilink-all.png";
+          pngpath = exportRender(curPNGPath, allNodes, export_with_maxspeed,
+                                 export_sort_method, export_color_style,
+                                 export_as_new_style, test_nat_type);
+          printMsg(SPEEDTEST_MESSAGE_PICSAVED, rpcmode, pngpath);
+          writeLog(LOG_TYPE_INFO, "Result saved to " + pngpath + " .");
+          if (rpcmode)
+            printMsg(SPEEDTEST_MESSAGE_PICDATA, rpcmode,
+                     "data:image/png;base64," + fileToBase64(pngpath));
+        } else {
+          printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
+          curPNGPathPrefix = replace_all_distinct(resultPath, ".log", "");
+          for (int i = 0; i < curGroupID; i++) {
+            eraseElements(nodes);
+            copyNodesWithGroupID(allNodes, nodes, i);
+            if (!nodes.size())
+              break;
+            if ((nodes.size() == 1 && single_test_force_export) ||
+                nodes.size() > 1) {
+              printMsg(SPEEDTEST_MESSAGE_PICSAVINGMULTI, rpcmode,
+                       std::to_string(i + 1));
+              writeLog(LOG_TYPE_INFO, "Now exporting result for group " +
+                                          std::to_string(i + 1) + "...");
+              curPNGPath = curPNGPathPrefix + "-multilink-group" +
+                           std::to_string(i + 1) + ".png";
+              pngpath = exportRender(curPNGPath, nodes, export_with_maxspeed,
+                                     export_sort_method, export_color_style,
+                                     export_as_new_style, test_nat_type);
+              printMsg(SPEEDTEST_MESSAGE_PICSAVEDMULTI, rpcmode,
+                       std::to_string(i + 1), pngpath);
+              writeLog(LOG_TYPE_INFO, "Group " + std::to_string(i + 1) +
+                                          " result saved to " + pngpath + " .");
+            } else
+              writeLog(LOG_TYPE_INFO, "Group " + std::to_string(i + 1) +
+                                          " result export skipped.");
+          }
         }
+      } else {
+        writeLog(LOG_TYPE_INFO, "Result export skipped.");
       }
     }
     writeLog(LOG_TYPE_INFO, "Multi-link test completed.");
@@ -2078,7 +2084,7 @@ int main(int argc, char *argv[]) {
     writeLog(LOG_TYPE_INFO, "Speedtest will now begin.");
     printMsg(SPEEDTEST_MESSAGE_BEGIN, rpcmode);
     singleTest(allNodes[0]);
-    if (single_test_force_export) {
+    if (export_picture && single_test_force_export) {
       printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
       writeLog(LOG_TYPE_INFO, "Now exporting result...");
       curPNGPath = "results" PATH_SLASH + getTime(1) + ".png";
