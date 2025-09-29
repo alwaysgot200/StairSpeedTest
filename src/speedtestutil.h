@@ -22,9 +22,22 @@ std::string vlessConstruct(const std::string &add, const std::string &port,
                            const std::string &tls, tribool scv,
                            const std::string &alpn, const std::string &fp,
                            const std::string &flow, const std::string &pbk,
-                           const std::string &sid,
-                           const std::string &mux_json);
+                           const std::string &sid, const std::string &mux_json);
+std::string
+ssV2RayConstruct(const std::string &group, const std::string &remarks,
+                 const std::string &server, const std::string &port,
+                 const std::string &password, const std::string &method,
+                 const std::string &plugin, const std::string &pluginopts,
+                 bool libev, tribool udp = tribool(), tribool tfo = tribool(),
+                 tribool scv = tribool(), tribool tls13 = tribool());
 
+std::string
+trojanV2RayConstruct(const std::string &group, const std::string &remarks,
+                     const std::string &server, const std::string &port,
+                     const std::string &password, const std::string &host,
+                     bool tlssecure, tribool udp = tribool(),
+                     tribool tfo = tribool(), tribool scv = tribool(),
+                     tribool tls13 = tribool());
 std::string ssrConstruct(const std::string &group, const std::string &remarks,
                          const std::string &remarks_base64,
                          const std::string &server, const std::string &port,

@@ -837,8 +837,8 @@ void explodeSS(std::string ss, bool libev, const std::string &custom_port,
   node.remarks = ps;
   node.server = server;
   node.port = to_int(port, 1);
-  node.proxyStr = ssConstruct(group, ps, server, port, password, method, plugin,
-                              pluginopts, libev);
+  node.proxyStr = ssV2RayConstruct(group, ps, server, port, password, method, plugin,
+                                   pluginopts, libev);
 }
 
 void explodeSSD(std::string link, bool libev, const std::string &custom_port,
@@ -1372,8 +1372,8 @@ void explodeTrojan(std::string trojan, const std::string &custom_port,
   node.remarks = remark;
   node.server = server;
   node.port = to_int(port, 1);
-  node.proxyStr = trojanConstruct(group, remark, server, port, psk, host, true,
-                                  tribool(), tfo, scv);
+  node.proxyStr = trojanV2RayConstruct(group, remark, server, port, psk, host, true,
+                                       tribool(), tfo, scv);
 }
 
 void explodeQuan(const std::string &quan, const std::string &custom_port,

@@ -45,6 +45,11 @@ std::string realset_vless =
     R"({"serverName":"?serverName?","publicKey":"?pbk?","shortId":"?sid?","fingerprint":"?fp?","alpn":?alpn?,"spiderX":"/"})";
 std::string quicset_vless =
     R"({"security":"?host?","key":"?path?","header":{"type":"?type?"}})";
+std::string base_ss_v2ray =
+    R"({"log":{"loglevel":"warning"},"inbounds":[{"port":?localport?,"listen":"127.0.0.1","protocol":"socks","settings":{"udp":true,"auth":"noauth"}}],"outbounds":[{"tag":"proxy","protocol":"shadowsocks","settings":{"servers":[{"address":"?server?","port":?port?,"method":"?method?","password":"?password?","level":0}]}}],"routing":{"domainStrategy":"AsIs"}})";
+
+std::string base_trojan_v2ray =
+    R"({"log":{"loglevel":"warning"},"inbounds":[{"port":?localport?,"listen":"127.0.0.1","protocol":"socks","settings":{"udp":true,"auth":"noauth"}}],"outbounds":[{"tag":"proxy","protocol":"trojan","settings":{"servers":[{"address":"?server?","port":?port?,"password":"?password?","level":0}]},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"serverName":"?sni?","allowInsecure":?allowInsecure?}}}],"routing":{"domainStrategy":"AsIs"}})";
 
 int explodeLog(const std::string &log, std::vector<nodeInfo> &nodes) {
   INIReader ini;
@@ -516,4 +521,40 @@ std::string snellConstruct(const std::string &group, const std::string &remarks,
                            tribool scv) {
   // no clients available, ignore
   return std::string();
+}
+std::string
+ssV2RayConstruct(const std::string &group, const std::string &remarks,
+                 const std::string &server, const std::string &port,
+                 const std::string &password, const std::string &method,
+                 const std::string &plugin, const std::string &pluginopts,
+                 bool libev, tribool udp, tribool tfo, tribool scv,
+                 tribool tls13) {
+  std::string base = base_ss_v2ray;
+  base = replace_first(base, "?localport?", std::to_string(socksport));
+  base = replace_first(base, "?server?",
+                       isIPv6(server) ? "[" + server + "]" : server);
+  base = replace_first(base, "?port?", port);
+  base = replace_first(base, "?method?", method);
+  base = replace_first(base, "?password?", password);
+  return base;
+}
+
+std::string
+trojanV2RayConstruct(const std::string &group, const std::string &remarks,
+                     const std::string &server, const std::string &port,
+                     const std::string &password, const std::string &host,
+                     bool tlssecure, tribool udp, tribool tfo, tribool scv,
+                     tribool tls13) {
+  std::string base = base_trojan_v2ray;
+  std::string sni = trim(host).size()
+                        ? trim(host)
+                        : (!isIPv4(server) && !isIPv6(server) ? server : "");
+  scv.define(true);
+  base = replace_first(base, "?localport?", std::to_string(socksport));
+  base = replace_first(base, "?server?", server);
+  base = replace_first(base, "?port?", port);
+  base = replace_first(base, "?password?", password);
+  base = replace_first(base, "?sni?", sni);
+  base = replace_first(base, "?allowInsecure?", scv ? "true" : "false");
+  return base;
 }

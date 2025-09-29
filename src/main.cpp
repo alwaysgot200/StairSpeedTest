@@ -1189,7 +1189,9 @@ void batchTest(std::vector<nodeInfo> &nodes) {
       if (custom_group.size() != 0)
         x.group = custom_group;
       if (x.linkType == SPEEDTEST_MESSAGE_FOUNDVMESS ||
-          x.linkType == SPEEDTEST_MESSAGE_FOUNDVLESS) {
+          x.linkType == SPEEDTEST_MESSAGE_FOUNDVLESS ||
+          x.linkType == SPEEDTEST_MESSAGE_FOUNDSS ||
+          x.linkType == SPEEDTEST_MESSAGE_FOUNDTROJAN) {
         v2ray_nodes.push_back(&x);
       } else {
         other_nodes.push_back(&x);
