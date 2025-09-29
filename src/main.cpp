@@ -17,7 +17,9 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <atomic>
 #include <conio.h>
+#include <windows.h>
 #else
 #include <termios.h>
 #endif // _WIN32
@@ -92,8 +94,8 @@ bool verbose = false;
 std::string export_sort_method = "none";
 
 // 新增：v2ray 分片与并发参数
-int v2ray_shard_size = 256;      // 每片最多节点数
-int v2ray_group_concurrency = 8; // 并发度（可改为 16）
+int v2ray_shard_size = 1024;       // 每片最多节点数
+int v2ray_group_concurrency = 256; // 并发度（可改为 16）
 
 int avail_status[5] = {0, 0, 0, 0, 0};
 unsigned int node_count = 0;
@@ -130,6 +132,28 @@ static bool extract_first_outbound(const std::string &single_config_json,
 static std::string buildAggregatedV2RayConfig(
     const std::vector<std::pair<nodeInfo *, int>> &items);
 static std::vector<int> allocateShardPorts(size_t count, int start_hint_port);
+// 处理GeoIP检测结果
+static void processGeoIPResult(nodeInfo &node, int rpcmode, std::string id) {
+  geoIPInfo outbound = node.outboundGeoIP.get();
+  if (outbound.organization.size()) {
+    writeLog(LOG_TYPE_INFO, "Got outbound ISP: " + outbound.organization +
+                                "  Country code: " + outbound.country_code);
+    printMsg(SPEEDTEST_MESSAGE_GOTGEOIP, rpcmode, id, outbound.organization,
+             outbound.country_code);
+  } else {
+    printMsg(SPEEDTEST_ERROR_GEOIPERR, rpcmode, id);
+  }
+}
+
+// 确保异步任务完成（Web模式）
+static void ensureAsyncTasksReady(nodeInfo &node) {
+  (void)node.inboundGeoIP.get();
+  (void)node.outboundGeoIP.get();
+  if (test_nat_type) {
+    (void)node.natType.get();
+  }
+}
+
 static int testNodeViaPreparedSocks(nodeInfo &node,
                                     const std::string &testserver, int testport,
                                     const std::string &username,
@@ -155,6 +179,66 @@ static inline int to_int(const char *s) {
     return 0;
   }
 }
+
+#ifdef _WIN32
+static std::atomic<int> g_current_node_id{-1};
+static std::atomic<const char *> g_current_stage{"init"};
+static std::mutex g_breadcrumb_mutex;
+static std::string g_current_node_key;
+
+void set_breadcrumb(int node_id, const char *stage) {
+  g_current_node_id.store(node_id, std::memory_order_relaxed);
+  g_current_stage.store(stage, std::memory_order_relaxed);
+  // 构造节点键：id|linkType|server|port，如索引无效则使用占位
+  std::string key;
+  if (node_id >= 0 && node_id < static_cast<int>(allNodes.size())) {
+    const nodeInfo &n = allNodes[node_id];
+    key = std::to_string(n.id) + "|" + std::to_string(n.linkType) + "|" +
+          n.server + "|" + std::to_string(n.port);
+  } else {
+    key = std::to_string(node_id) + "|?|?|?";
+  }
+  {
+    std::lock_guard<std::mutex> lk(g_breadcrumb_mutex);
+    g_current_node_key = key;
+  }
+  writeLog(LOG_TYPE_INFO,
+           "Breadcrumb: node=" + key + " stage=" + std::string(stage));
+}
+
+static LONG WINAPI CrashUnhandledFilter(EXCEPTION_POINTERS *ep) {
+  std::string msg = "Unhandled exception. Last breadcrumb: node_id=" +
+                    std::to_string(g_current_node_id.load()) +
+                    " stage=" + std::string(g_current_stage.load());
+  writeLog(LOG_TYPE_ERROR, msg);
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
+static void installCrashFilter() {
+  SetUnhandledExceptionFilter(CrashUnhandledFilter);
+}
+
+// 新增：零查找重载版本，直接用传入的 node 构造节点键
+void set_breadcrumb(const nodeInfo &node, const char *stage) {
+  g_current_node_id.store(node.id, std::memory_order_relaxed);
+  g_current_stage.store(stage, std::memory_order_relaxed);
+
+  std::string key = std::to_string(node.id) + "|" +
+                    std::to_string(node.linkType) + "|" + node.server + "|" +
+                    std::to_string(node.port);
+  {
+    std::lock_guard<std::mutex> lk(g_breadcrumb_mutex);
+    g_current_node_key = key;
+  }
+  writeLog(LOG_TYPE_INFO,
+           "Breadcrumb: node=" + key + " stage=" + std::string(stage));
+}
+#else
+static inline void set_breadcrumb(int, const char *) {}
+static inline void installCrashFilter() {}
+// 非 Windows：为重载提供空实现，保持链接一致
+static inline void set_breadcrumb(const nodeInfo &, const char *) {}
+#endif
 
 // original codes
 
@@ -267,6 +351,7 @@ void clientCheck() {
 
 bool runClient(int client) {
 #ifdef _WIN32
+
   // std::string v2core_path = "tools\\clients\\v2ray.exe run -c config.json";
   std::string v2core_path = "tools\\clients\\v2ray.exe -config config.json";
   std::string ssr_libev_path =
@@ -327,7 +412,8 @@ bool runClient(int client) {
     return false;
   }
 #else
-  // std::string v2core_path = "tools/clients/v2ray run -c config.json";
+
+  // std::string v2core_path = "tools/clients/v2ray  -config config.json";
   std::string v2core_path = "tools/clients/v2ray  -config config.json";
   std::string ssr_libev_path = "tools/clients/ssr-local -u -c config.json";
   std::string trojan_path = "tools/clients/trojan -c config.json";
@@ -605,6 +691,10 @@ void readConf(std::string path) {
   ini.GetIntIfExist("listen_port", listen_port);
   ini.GetIntIfExist("http_timeout_seconds",
                     http_timeout_seconds); // 新增：从配置读取
+#ifdef _WIN32
+  // 安装未捕获异常拦截器，保证后续任何阶段崩溃能写面包屑到日志
+  installCrashFilter();
+#endif
 }
 
 void signalHandler(int signum) {
@@ -858,6 +948,8 @@ int singleTest(nodeInfo &node) {
   cur_node_id = node.id;
   std::string id = std::to_string(node.id + (rpcmode ? 0 : 1));
 
+  set_breadcrumb(node, "singleTest:begin");
+
   writeLog(LOG_TYPE_INFO,
            "Received server. Group: " + node.group + " Name: " + node.remarks);
   defer(printMsg(SPEEDTEST_MESSAGE_GOTRESULT, rpcmode, node.avgSpeed,
@@ -926,19 +1018,6 @@ int singleTest(nodeInfo &node) {
     printMsg(SPEEDTEST_MESSAGE_GOTSERVER, rpcmode, id, node.group, node.remarks,
              std::to_string(node_count));
   sleep(200); /// wait for client startup
-  writeLog(LOG_TYPE_INFO, "Now started fetching GeoIP info...");
-  printMsg(SPEEDTEST_MESSAGE_STARTGEOIP, rpcmode, id);
-  node.inboundGeoIP.set(std::async(
-      std::launch::async, [node]() { return getGeoIPInfo(node.server, ""); }));
-  node.outboundGeoIP.set(std::async(
-      std::launch::async, [proxy]() { return getGeoIPInfo("", proxy); }));
-  if (test_nat_type) {
-    printMsg(SPEEDTEST_MESSAGE_STARTNAT, rpcmode, id);
-    node.natType.set(std::async(std::launch::async, [testserver, testport,
-                                                     username, password]() {
-      return get_nat_type_thru_socks5(testserver, testport, username, password);
-    }));
-  }
 
   // Here begin TCP ping
   printMsg(SPEEDTEST_MESSAGE_STARTPING, rpcmode, id);
@@ -967,24 +1046,10 @@ int singleTest(nodeInfo &node) {
     node.pkLoss = "0.00%";
   printMsg(SPEEDTEST_MESSAGE_GOTPING, rpcmode, id, node.avgPing, node.pkLoss);
 
-  getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
-  if (!webserver_mode) {
-    geoIPInfo outbound = node.outboundGeoIP.get();
-    // 新增：把出站 GeoIP 的国家代码写入 nodeinfo
-    node.outboundCountryCode = outbound.country_code;
-    if (outbound.organization.size()) {
-      writeLog(LOG_TYPE_INFO, "Got outbound ISP: " + outbound.organization +
-                                  "  Country code: " + outbound.country_code);
-      printMsg(SPEEDTEST_MESSAGE_GOTGEOIP, rpcmode, id, outbound.organization,
-               outbound.country_code);
-    } else
-      printMsg(SPEEDTEST_ERROR_GEOIPERR, rpcmode, id);
-    if (test_nat_type)
-      printMsg(SPEEDTEST_MESSAGE_GOTNAT, rpcmode, id, node.natType.get());
-  }
   // ping a real website with proxy engine
   if (test_site_ping) {
     printMsg(SPEEDTEST_MESSAGE_STARTGPING, rpcmode, id);
+    set_breadcrumb(node, "singleTest:sitePing");
     writeLog(LOG_TYPE_INFO, "Now performing site ping...");
     // websitePing(node, "https://www.google.com/", testserver, testport,
     // username, password);
@@ -997,11 +1062,26 @@ int singleTest(nodeInfo &node) {
     writeLog(LOG_TYPE_RAW, logdata);
     writeLog(LOG_TYPE_INFO, "Site ping: " + node.sitePing);
     printMsg(SPEEDTEST_MESSAGE_GOTGPING, rpcmode, id, node.sitePing);
+    // 如果所有时延都失败，就返回
+    bool anySuccess = false;
+    for (int v : node.rawSitePing) {
+      if (v > 0) {
+        anySuccess = true;
+        break;
+      }
+    }
+    if (!anySuccess) {
+      writeLog(LOG_TYPE_ERROR, "Site ping failed or timed out.");
+      printMsg(SPEEDTEST_ERROR_NOCONNECTION, rpcmode, id);
+      return SPEEDTEST_ERROR_NOCONNECTION;
+    }
   }
   // test to download the data from remote site
   printMsg(SPEEDTEST_MESSAGE_STARTSPEED, rpcmode, id);
   // node.total_recv_bytes = 1;
   if (speedtest_mode != "pingonly") {
+    set_breadcrumb(node, "singleTest:download");
+    getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
     writeLog(LOG_TYPE_INFO, "Now performing file download speed test...");
     perform_test(node, testserver, testport, username, password,
                  def_thread_count);
@@ -1014,6 +1094,7 @@ int singleTest(nodeInfo &node) {
     if (node.totalRecvBytes == 0) {
       writeLog(LOG_TYPE_ERROR, "Speedtest returned no speed.");
       printMsg(SPEEDTEST_ERROR_RETEST, rpcmode, id);
+      set_breadcrumb(node, "singleTest:download_retest");
       perform_test(node, testserver, testport, username, password,
                    def_thread_count);
       logdata = std::accumulate(
@@ -1035,17 +1116,47 @@ int singleTest(nodeInfo &node) {
   printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed,
            node.maxSpeed);
   if (test_upload) {
+    set_breadcrumb(node, "singleTest:upload");
     writeLog(LOG_TYPE_INFO, "Now performing upload speed test...");
     printMsg(SPEEDTEST_MESSAGE_STARTUPD, rpcmode, id);
     upload_test(node, testserver, testport, username, password);
     printMsg(SPEEDTEST_MESSAGE_GOTUPD, rpcmode, id, node.ulSpeed);
   }
+
+  // Begin to test  NAT type test
+  if (test_nat_type) {
+    printMsg(SPEEDTEST_MESSAGE_STARTNAT, rpcmode, id);
+    node.natType.set(std::async(std::launch::async, [testserver, testport,
+                                                     username, password]() {
+      return get_nat_type_thru_socks5(testserver, testport, username, password);
+    }));
+  }
+  // Here begin the GeoIP test
+  writeLog(LOG_TYPE_INFO, "Now started fetching GeoIP info...");
+  printMsg(SPEEDTEST_MESSAGE_STARTGEOIP, rpcmode, id);
+  node.inboundGeoIP.set(std::async(
+      std::launch::async, [node]() { return getGeoIPInfo(node.server, ""); }));
+  node.outboundGeoIP.set(std::async(
+      std::launch::async, [proxy]() { return getGeoIPInfo("", proxy); }));
+
+  // 等待异步任务完成并处理结果
+  if (!webserver_mode) {
+    // 控制台模式：获取并显示详细结果
+    processGeoIPResult(node, rpcmode, id);
+    if (test_nat_type) {
+      printMsg(SPEEDTEST_MESSAGE_GOTNAT, rpcmode, id, node.natType.get());
+    }
+  } else {
+    // Web模式：仅确保数据就绪，防止/getresults阻塞
+    ensureAsyncTasksReady(node);
+  }
+
+  // 总结测试结果
   writeLog(LOG_TYPE_INFO,
            "Average speed: " + node.avgSpeed + "  Max speed: " + node.maxSpeed +
                "  Upload speed: " + node.ulSpeed + "  Traffic used in bytes: " +
                std::to_string(node.totalRecvBytes));
   node.online = true;
-  sleep(300);
   return SPEEDTEST_ERROR_NONE;
 }
 // test the nodes now
@@ -1087,10 +1198,34 @@ void batchTest(std::vector<nodeInfo> &nodes) {
 
     // VMESS+VLESS：分片并发（单进程 v2ray）
     if (!v2ray_nodes.empty()) {
+      // 新增：统一收敛 shard_size 与 concurrency（均支持“合并/继承”策略）
+      const unsigned int hw = std::thread::hardware_concurrency();
+      const int auto_workers = hw ? static_cast<int>(hw) * 2 : 8;
+      const int auto_threshold =
+          (parse_parallel_threshold > 0) ? parse_parallel_threshold : 512;
+
+      // 未显式设置时，分片大小继承 parallel_threshold
+      if (v2ray_shard_size <= 0)
+        v2ray_shard_size = auto_threshold;
+      if (v2ray_shard_size < 1)
+        v2ray_shard_size = 1;
+      // 未显式设置时，并发继承 parse.worker_count 或 2*HW
+      if (v2ray_group_concurrency <= 0)
+        v2ray_group_concurrency =
+            (parse_worker_count > 0) ? parse_worker_count : auto_workers;
+      if (v2ray_group_concurrency < 1)
+        v2ray_group_concurrency = 1;
+      if (v2ray_shard_size >= v2ray_nodes.size())
+        v2ray_shard_size = v2ray_nodes.size();
+      // 并发不超过分片大小
+      if (v2ray_group_concurrency > v2ray_shard_size)
+        v2ray_group_concurrency = v2ray_shard_size;
+
       writeLog(LOG_TYPE_INFO,
-               "Testing VMESS+VLESS group with shard size " +
-                   std::to_string(v2ray_shard_size) + " and concurrency " +
-                   std::to_string(v2ray_group_concurrency) + " ...");
+               "v2ray_shard_size=" + std::to_string(v2ray_shard_size) +
+                   ", v2ray_group_concurrency=" +
+                   std::to_string(v2ray_group_concurrency));
+
       testV2RayShards(v2ray_nodes, v2ray_shard_size, v2ray_group_concurrency);
     }
 
@@ -1294,6 +1429,9 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
   node.ulTarget = def_upload_target;
   std::string id = std::to_string(node.id + (rpcmode ? 0 : 1));
 
+  // 面包屑：并发测试（已就绪的 SOCKS）开始
+  set_breadcrumb(node, "preparedSocks:begin");
+
   writeLog(LOG_TYPE_INFO,
            "Received server. Group: " + node.group + " Name: " + node.remarks);
   auto start = steady_clock::now();
@@ -1302,15 +1440,153 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
     printMsg(SPEEDTEST_MESSAGE_GOTSERVER, rpcmode, id, node.group, node.remarks,
              std::to_string(node_count));
 
-  proxy = buildSocks5ProxyString(testserver, testport, username, password);
+  try {
+    proxy = buildSocks5ProxyString(testserver, testport, username, password);
+    // TCP ping（直连，不走代理）
+    printMsg(SPEEDTEST_MESSAGE_STARTPING, rpcmode, id);
+    if (speedtest_mode != "speedonly") {
+      writeLog(LOG_TYPE_INFO, "Now performing TCP ping...");
+      retVal = tcping(node);
+      if (retVal == SPEEDTEST_ERROR_NORESOLVE) {
+        writeLog(LOG_TYPE_ERROR, "Node address resolve error.");
+        printMsg(SPEEDTEST_ERROR_NORESOLVE, rpcmode, id);
+        return SPEEDTEST_ERROR_NORESOLVE;
+      }
+      if (node.pkLoss == "100.00%") {
+        writeLog(LOG_TYPE_ERROR, "Cannot connect to this node.");
+        printMsg(SPEEDTEST_ERROR_NOCONNECTION, rpcmode, id);
+        return SPEEDTEST_ERROR_NOCONNECTION;
+      }
+      // 修复：直接聚合 rawPing，不做空检查
+      logdata = std::accumulate(
+          std::next(std::begin(node.rawPing)), std::end(node.rawPing),
+          std::to_string(node.rawPing[0]), [](std::string a, int b) {
+            return std::move(a) + " " + std::to_string(b);
+          });
+      writeLog(LOG_TYPE_RAW, logdata);
+      writeLog(LOG_TYPE_INFO,
+               "TCP Ping: " + node.avgPing + "  Packet Loss: " + node.pkLoss);
+    } else {
+      node.pkLoss = "0.00%";
+    }
+    printMsg(SPEEDTEST_MESSAGE_GOTPING, rpcmode, id, node.avgPing, node.pkLoss);
 
-  writeLog(LOG_TYPE_INFO, "Now started fetching GeoIP info...");
-  printMsg(SPEEDTEST_MESSAGE_STARTGEOIP, rpcmode, id);
-  node.inboundGeoIP.set(std::async(
-      std::launch::async, [node]() { return getGeoIPInfo(node.server, ""); }));
-  node.outboundGeoIP.set(std::async(
-      std::launch::async, [proxy]() { return getGeoIPInfo("", proxy); }));
+    // 开始测试google时延
+    if (test_site_ping) {
+      printMsg(SPEEDTEST_MESSAGE_STARTGPING, rpcmode, id);
+      writeLog(LOG_TYPE_INFO, "Now performing site ping...");
 
+      // 面包屑：站点时延阶段
+      set_breadcrumb(node, "preparedSocks:sitePing");
+
+      sitePing(node, testserver, testport, username, password, site_ping_url);
+      // 修复：直接聚合 rawSitePing，不做空检查
+      logdata = std::accumulate(
+          std::next(std::begin(node.rawSitePing)), std::end(node.rawSitePing),
+          std::to_string(node.rawSitePing[0]), [](std::string a, int b) {
+            return std::move(a) + " " + std::to_string(b);
+          });
+      writeLog(LOG_TYPE_RAW, logdata);
+      writeLog(LOG_TYPE_INFO, "Site ping: " + node.sitePing);
+      printMsg(SPEEDTEST_MESSAGE_GOTGPING, rpcmode, id, node.sitePing);
+      // 如果所有时延都失败，就返回
+      bool anySuccess = false;
+      for (int v : node.rawSitePing) {
+        if (v > 0) {
+          anySuccess = true;
+          break;
+        }
+      }
+      if (!anySuccess) {
+        writeLog(LOG_TYPE_ERROR, "Site ping failed or timed out.");
+        printMsg(SPEEDTEST_ERROR_NOCONNECTION, rpcmode, id);
+        return SPEEDTEST_ERROR_NOCONNECTION;
+      }
+    }
+
+    // 开始测试下载速度
+    printMsg(SPEEDTEST_MESSAGE_STARTSPEED, rpcmode, id);
+    if (speedtest_mode != "pingonly") {
+      getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
+      writeLog(LOG_TYPE_INFO, "Now performing file download speed test...");
+
+      // 面包屑：下载测速阶段
+      set_breadcrumb(node, "preparedSocks:download");
+
+      perform_test(node, testserver, testport, username, password,
+                   def_thread_count);
+
+      // 修复：直接聚合 rawSpeed，不做空检查
+      logdata = std::accumulate(
+          std::next(std::begin(node.rawSpeed)), std::end(node.rawSpeed),
+          std::to_string(node.rawSpeed[0]), [](std::string a, int b) {
+            return std::move(a) + " " + std::to_string(b);
+          });
+      writeLog(LOG_TYPE_RAW, logdata);
+
+      if (node.totalRecvBytes == 0) {
+        writeLog(LOG_TYPE_ERROR, "Speedtest returned no speed.");
+        printMsg(SPEEDTEST_ERROR_RETEST, rpcmode, id);
+
+        // 面包屑：下载重测阶段
+        set_breadcrumb(node, "preparedSocks:download_retest");
+
+        perform_test(node, testserver, testport, username, password,
+                     def_thread_count);
+
+        // 修复：直接聚合 rawSpeed（重测），不做空检查
+        logdata = std::accumulate(
+            std::next(std::begin(node.rawSpeed)), std::end(node.rawSpeed),
+            std::to_string(node.rawSpeed[0]), [](std::string a, int b) {
+              return std::move(a) + " " + std::to_string(b);
+            });
+        writeLog(LOG_TYPE_RAW, logdata);
+
+        if (node.totalRecvBytes == 0) {
+          writeLog(LOG_TYPE_ERROR, "Speedtest returned no speed 2 times.");
+          printMsg(SPEEDTEST_ERROR_NOSPEED, rpcmode, id);
+          printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed,
+                   node.maxSpeed);
+          return SPEEDTEST_ERROR_NOSPEED;
+        }
+      }
+    }
+    printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed,
+             node.maxSpeed);
+
+    // 开始测试上传
+    if (test_upload) {
+      writeLog(LOG_TYPE_INFO, "Now performing upload speed test...");
+      printMsg(SPEEDTEST_MESSAGE_STARTUPD, rpcmode, id);
+
+      // 面包屑：上传测速阶段
+      set_breadcrumb(node, "preparedSocks:upload");
+
+      upload_test(node, testserver, testport, username, password);
+      printMsg(SPEEDTEST_MESSAGE_GOTUPD, rpcmode, id, node.ulSpeed);
+    }
+  } catch (const std::exception &ex) {
+    set_breadcrumb(node, "preparedSocks:exception");
+    writeLog(
+        LOG_TYPE_ERROR,
+        std::string("Unhandled std::exception in testNodeViaPreparedSocks: ") +
+            ex.what());
+    node.online = false;
+    if (!rpcmode)
+      printMsg(SPEEDTEST_ERROR_NOSPEED, rpcmode, id);
+    return SPEEDTEST_ERROR_NOSPEED;
+  } catch (...) {
+    set_breadcrumb(node, "preparedSocks:exception");
+    writeLog(LOG_TYPE_ERROR,
+             "Unhandled non-std exception in testNodeViaPreparedSocks.");
+    node.online = false;
+    if (!rpcmode)
+      printMsg(SPEEDTEST_ERROR_NOSPEED, rpcmode, id);
+    return SPEEDTEST_ERROR_NOSPEED;
+  }
+
+  // 关键修复：Web 模式下，确保异步任务在返回前完成，避免被随后 kill 的 v2ray
+  // 启动异步NAT类型检测任务（如果启用）
   if (test_nat_type) {
     printMsg(SPEEDTEST_MESSAGE_STARTNAT, rpcmode, id);
     node.natType.set(std::async(std::launch::async, [testserver, testport,
@@ -1318,114 +1594,25 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
       return get_nat_type_thru_socks5(testserver, testport, username, password);
     }));
   }
-
-  // TCP ping（直连，不走代理）
-  printMsg(SPEEDTEST_MESSAGE_STARTPING, rpcmode, id);
-  if (speedtest_mode != "speedonly") {
-    writeLog(LOG_TYPE_INFO, "Now performing TCP ping...");
-    retVal = tcping(node);
-    if (retVal == SPEEDTEST_ERROR_NORESOLVE) {
-      writeLog(LOG_TYPE_ERROR, "Node address resolve error.");
-      printMsg(SPEEDTEST_ERROR_NORESOLVE, rpcmode, id);
-      return SPEEDTEST_ERROR_NORESOLVE;
-    }
-    if (node.pkLoss == "100.00%") {
-      writeLog(LOG_TYPE_ERROR, "Cannot connect to this node.");
-      printMsg(SPEEDTEST_ERROR_NOCONNECTION, rpcmode, id);
-      return SPEEDTEST_ERROR_NOCONNECTION;
-    }
-    logdata = std::accumulate(
-        std::next(std::begin(node.rawPing)), std::end(node.rawPing),
-        std::to_string(node.rawPing[0]), [](std::string a, int b) {
-          return std::move(a) + " " + std::to_string(b);
-        });
-    writeLog(LOG_TYPE_RAW, logdata);
-    writeLog(LOG_TYPE_INFO,
-             "TCP Ping: " + node.avgPing + "  Packet Loss: " + node.pkLoss);
-  } else {
-    node.pkLoss = "0.00%";
-  }
-  printMsg(SPEEDTEST_MESSAGE_GOTPING, rpcmode, id, node.avgPing, node.pkLoss);
-
-  // 开始测试google时延
-  if (test_site_ping) {
-    printMsg(SPEEDTEST_MESSAGE_STARTGPING, rpcmode, id);
-    writeLog(LOG_TYPE_INFO, "Now performing site ping...");
-    sitePing(node, testserver, testport, username, password, site_ping_url);
-    logdata = std::accumulate(
-        std::next(std::begin(node.rawSitePing)), std::end(node.rawSitePing),
-        std::to_string(node.rawSitePing[0]), [](std::string a, int b) {
-          return std::move(a) + " " + std::to_string(b);
-        });
-    writeLog(LOG_TYPE_RAW, logdata);
-    writeLog(LOG_TYPE_INFO, "Site ping: " + node.sitePing);
-    printMsg(SPEEDTEST_MESSAGE_GOTGPING, rpcmode, id, node.sitePing);
-  }
-
-  // 开始测试下载速度
-  printMsg(SPEEDTEST_MESSAGE_STARTSPEED, rpcmode, id);
-  if (speedtest_mode != "pingonly") {
-    getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
-    writeLog(LOG_TYPE_INFO, "Now performing file download speed test...");
-    perform_test(node, testserver, testport, username, password,
-                 def_thread_count);
-    logdata = std::accumulate(
-        std::next(std::begin(node.rawSpeed)), std::end(node.rawSpeed),
-        std::to_string(node.rawSpeed[0]), [](std::string a, int b) {
-          return std::move(a) + " " + std::to_string(b);
-        });
-    writeLog(LOG_TYPE_RAW, logdata);
-    if (node.totalRecvBytes == 0) {
-      writeLog(LOG_TYPE_ERROR, "Speedtest returned no speed.");
-      printMsg(SPEEDTEST_ERROR_RETEST, rpcmode, id);
-      perform_test(node, testserver, testport, username, password,
-                   def_thread_count);
-      logdata = std::accumulate(
-          std::next(std::begin(node.rawSpeed)), std::end(node.rawSpeed),
-          std::to_string(node.rawSpeed[0]), [](std::string a, int b) {
-            return std::move(a) + " " + std::to_string(b);
-          });
-      writeLog(LOG_TYPE_RAW, logdata);
-      if (node.totalRecvBytes == 0) {
-        writeLog(LOG_TYPE_ERROR, "Speedtest returned no speed 2 times.");
-        printMsg(SPEEDTEST_ERROR_NOSPEED, rpcmode, id);
-        printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed,
-                 node.maxSpeed);
-        return SPEEDTEST_ERROR_NOSPEED;
-      }
-    }
-  }
-  printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed,
-           node.maxSpeed);
-  // 开始测试上传
-  if (test_upload) {
-    writeLog(LOG_TYPE_INFO, "Now performing upload speed test...");
-    printMsg(SPEEDTEST_MESSAGE_STARTUPD, rpcmode, id);
-    upload_test(node, testserver, testport, username, password);
-    printMsg(SPEEDTEST_MESSAGE_GOTUPD, rpcmode, id, node.ulSpeed);
-  }
-
-  // 关键修复：Web 模式下，确保异步任务在返回前完成，避免被随后 kill 的 v2ray
-  // 获得IP所属国家区域信息
+  // 启动异步GeoIP检测任务// 获得IP所属国家区域信息
+  writeLog(LOG_TYPE_INFO, "Now started fetching GeoIP info...");
+  printMsg(SPEEDTEST_MESSAGE_STARTGEOIP, rpcmode, id);
+  node.inboundGeoIP.set(std::async(
+      std::launch::async, [node]() { return getGeoIPInfo(node.server, ""); }));
+  node.outboundGeoIP.set(std::async(
+      std::launch::async, [proxy]() { return getGeoIPInfo("", proxy); }));
+  // 等待异步任务完成并处理结果
   if (!webserver_mode) {
-    geoIPInfo outbound = node.outboundGeoIP.get();
-    if (outbound.organization.size()) {
-      writeLog(LOG_TYPE_INFO, "Got outbound ISP: " + outbound.organization +
-                                  "  Country code: " + outbound.country_code);
-      printMsg(SPEEDTEST_MESSAGE_GOTGEOIP, rpcmode, id, outbound.organization,
-               outbound.country_code);
-    } else
-      printMsg(SPEEDTEST_ERROR_GEOIPERR, rpcmode, id);
-    if (test_nat_type)
-      printMsg(SPEEDTEST_MESSAGE_GOTNAT, rpcmode, id, node.natType.get());
-  } else {
-    // 这些 get() 不打印，仅确保数据就绪，防止 /getresults 阻塞
-    (void)node.inboundGeoIP.get();
-    (void)node.outboundGeoIP.get();
+    // 控制台模式：获取并显示详细结果
+    processGeoIPResult(node, rpcmode, id);
     if (test_nat_type) {
-      (void)node.natType.get();
+      printMsg(SPEEDTEST_MESSAGE_GOTNAT, rpcmode, id, node.natType.get());
     }
+  } else {
+    // Web模式：仅确保数据就绪，防止/getresults阻塞
+    ensureAsyncTasksReady(node);
   }
+
   // 开始总结
   writeLog(LOG_TYPE_INFO,
            "Average speed: " + node.avgSpeed + "  Max speed: " + node.maxSpeed +
@@ -1435,7 +1622,6 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
   auto end = steady_clock::now();
   auto lapse = duration_cast<seconds>(end - start);
   node.duration = lapse.count();
-  sleep(300);
   return SPEEDTEST_ERROR_NONE;
 }
 
@@ -1623,24 +1809,17 @@ static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
     size_t j_end = std::min(group.size(), i + (size_t)shard_size);
     std::vector<nodeInfo *> shard(group.begin() + i, group.begin() + j_end);
 
-    // (1) 分配端口并生成/写入配置文件
-    std::vector<int> ports;
-    if (!prepareShardConfigAndPorts(shard, ports)) {
-      for (auto *n : shard) {
-        n->online = false;
-        webui_notify_node_tested(*n);
-      }
-      continue; // 下一个分片
-    }
+    // 面包屑：进入一个分片迭代
+    set_breadcrumb(-1, "testV2RayShards:iter_begin");
 
-    // (2) 启动客户端
-    bool ok = runClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
-    if (!ok) {
-      // (3) 启动失败：剔除失败节点，得到正常节点集合
-      auto shard_valid = getValidNodes(shard);
-      if (shard_valid.empty()) {
-        writeLog(LOG_TYPE_ERROR,
-                 "Shard has no valid nodes after removal. Mark all as failed.");
+    try {
+      // (1) 分配端口并生成/写入配置文件
+      std::vector<int> ports;
+
+      // 面包屑：准备分片配置（分配端口+生成配置）
+      set_breadcrumb(-1, "testV2RayShards:prepare_shard");
+
+      if (!prepareShardConfigAndPorts(shard, ports)) {
         for (auto *n : shard) {
           n->online = false;
           webui_notify_node_tested(*n);
@@ -1648,43 +1827,101 @@ static void testV2RayShards(std::vector<nodeInfo *> &group, int shard_size,
         continue; // 下一个分片
       }
 
-      // (4) 对有效子集：重新分配端口+生成/写入配置文件，然后再次启动
-      std::vector<int> ports2;
-      if (!prepareShardConfigAndPorts(shard_valid, ports2)) {
-        for (auto *n : shard_valid) {
-          n->online = false;
-          webui_notify_node_tested(*n);
-        }
-        continue;
-      }
+      // 面包屑：分片配置就绪
+      set_breadcrumb(-1, "testV2RayShards:prepare_ok");
 
-      bool ok2 = runClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
-      if (!ok2) {
-        writeLog(LOG_TYPE_ERROR,
-                 "Client startup still failed after removing invalid nodes. "
-                 "Mark subset nodes as failed.");
-        for (auto *n : shard_valid) {
-          n->online = false;
-          webui_notify_node_tested(*n);
+      // (2) 启动客户端
+      set_breadcrumb(-1, "testV2RayShards:start_client");
+      bool ok = runClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+      if (!ok) {
+        // 面包屑：首次启动失败
+        set_breadcrumb(-1, "testV2RayShards:client_fail");
+
+        // (3) 启动失败：剔除失败节点，得到正常节点集合
+        auto shard_valid = getValidNodes(shard);
+        if (shard_valid.empty()) {
+          writeLog(
+              LOG_TYPE_ERROR,
+              "Shard has no valid nodes after removal. Mark all as failed.");
+          for (auto *n : shard) {
+            n->online = false;
+            webui_notify_node_tested(*n);
+          }
+          continue; // 下一个分片
         }
+
+        // (4) 对有效子集：重新分配端口+生成/写入配置文件，然后再次启动
+        std::vector<int> ports2;
+        if (!prepareShardConfigAndPorts(shard_valid, ports2)) {
+          for (auto *n : shard_valid) {
+            n->online = false;
+            webui_notify_node_tested(*n);
+          }
+          continue;
+        }
+
+        // 面包屑：重试启动客户端
+        set_breadcrumb(-1, "testV2RayShards:client_retry_start");
+        bool ok2 = runClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+        if (!ok2) {
+          // 面包屑：重试仍失败
+          set_breadcrumb(-1, "testV2RayShards:client_retry_fail");
+
+          writeLog(LOG_TYPE_ERROR,
+                   "Client startup still failed after removing invalid nodes. "
+                   "Mark subset nodes as failed.");
+          for (auto *n : shard_valid) {
+            n->online = false;
+            webui_notify_node_tested(*n);
+          }
+          continue; // 下一个分片
+        }
+
+        // (5) 标准流程：sleep->端口就绪->并发测试->汇集输出
+        set_breadcrumb(-1, "testV2RayShards:concurrency_test");
+        testShardWithConcurrency(shard_valid, ports2, concurrency);
+
+        // 终止客户端
+        set_breadcrumb(-1, "testV2RayShards:kill_client");
+        killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+        sleep(200);
         continue; // 下一个分片
       }
 
-      // (5) 标准流程：sleep->端口就绪->并发测试->汇集输出
-      testShardWithConcurrency(shard_valid, ports2, concurrency);
+      // 初次启动成功：(5) 标准流程：sleep->端口就绪->并发测试->汇集输出
+      set_breadcrumb(-1, "testV2RayShards:concurrency_test");
+      testShardWithConcurrency(shard, ports, concurrency);
 
       // 终止客户端
+      set_breadcrumb(-1, "testV2RayShards:kill_client");
       killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
       sleep(200);
-      continue; // 下一个分片
+    } catch (const std::exception &ex) {
+      // 面包屑：分片迭代异常
+      set_breadcrumb(-1, "testV2RayShards:exception");
+      writeLog(LOG_TYPE_ERROR,
+               std::string(
+                   "Unhandled std::exception in testV2RayShards iteration: ") +
+                   ex.what());
+      // 尝试清理客户端，避免遗留子进程
+      killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+      sleep(200);
+      // 保守处理：标记分片内所有节点失败并通知
+      for (auto *n : shard) {
+        n->online = false;
+        webui_notify_node_tested(*n);
+      }
+    } catch (...) {
+      set_breadcrumb(-1, "testV2RayShards:exception");
+      writeLog(LOG_TYPE_ERROR,
+               "Unhandled non-std exception in testV2RayShards iteration.");
+      killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
+      sleep(200);
+      for (auto *n : shard) {
+        n->online = false;
+        webui_notify_node_tested(*n);
+      }
     }
-
-    // 初次启动成功：(5) 标准流程：sleep->端口就绪->并发测试->汇集输出
-    testShardWithConcurrency(shard, ports, concurrency);
-
-    // 终止客户端
-    killClient(SPEEDTEST_MESSAGE_FOUNDVLESS);
-    sleep(200);
   }
 }
 void rewriteNodeID(std::vector<nodeInfo> &nodes) {
@@ -1915,39 +2152,7 @@ int main(int argc, char *argv[]) {
   makeDir("results");
   logInit(rpcmode);
   readConf("pref.ini");
-  // 新增：统一收敛 shard_size 与 concurrency（均支持“合并/继承”策略）
-  {
-    const unsigned int hw = std::thread::hardware_concurrency();
-    const int auto_workers = hw ? static_cast<int>(hw) * 2 : 8;
-    const int auto_threshold =
-        (parse_parallel_threshold > 0) ? parse_parallel_threshold : 512;
 
-    // 未显式设置时，分片大小继承 parallel_threshold
-    if (v2ray_shard_size <= 0)
-      v2ray_shard_size = auto_threshold;
-    if (v2ray_shard_size < 1)
-      v2ray_shard_size = 1;
-
-    // 未显式设置时，并发继承 parse.worker_count 或 2*HW
-    if (v2ray_group_concurrency <= 0)
-      v2ray_group_concurrency =
-          (parse_worker_count > 0) ? parse_worker_count : auto_workers;
-    if (v2ray_group_concurrency < 1)
-      v2ray_group_concurrency = 1;
-
-    // 并发不超过分片大小
-    if (v2ray_group_concurrency > v2ray_shard_size)
-      v2ray_group_concurrency = v2ray_shard_size;
-
-    writeLog(LOG_TYPE_INFO,
-             "Effective params: parallel_threshold=" +
-                 std::to_string(auto_threshold) + ", v2ray_shard_size=" +
-                 std::to_string(v2ray_shard_size) + ", parse_workers=" +
-                 std::to_string(parse_worker_count > 0 ? parse_worker_count
-                                                       : auto_workers) +
-                 ", v2ray_group_concurrency=" +
-                 std::to_string(v2ray_group_concurrency));
-  }
 #ifdef _WIN32
   // start up windows socket library first
   WSADATA wsd;

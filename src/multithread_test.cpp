@@ -23,7 +23,8 @@ using namespace std::chrono;
 std::queue<SOCKET> opened_socket;
 
 #define MAX_FILE_SIZE 512 * 1024 * 1024
-
+extern void set_breadcrumb(int node_id, const char *stage);
+extern void set_breadcrumb(const nodeInfo &node, const char *stage);
 // for use of site ping
 const int times_to_ping = 10, fail_limit = 2;
 
@@ -99,9 +100,11 @@ static void SSL_Library_init() {
 
 int _thread_download(std::string host, int port, std::string uri,
                      std::string localaddr, int localport, std::string username,
-                     std::string password, bool useTLS /* = false */) {
+                     std::string password, bool useTLS /* = false */,
+                     int node_id) {
   launched++;
   still_running++;
+  set_breadcrumb(node_id, "filedl_thread:start"); // 新增：线程启动
   defer(still_running--;) char bufRecv[BUF_SIZE];
   int retVal, cur_len /*, recv_len = 0*/;
   SOCKET sHost;
@@ -116,22 +119,45 @@ int _thread_download(std::string host, int port, std::string uri,
                         "Chrome/72.0.3626.121 Safari/537.36\r\n\r\n";
 
   sHost = initSocket(getNetworkType(localaddr), SOCK_STREAM, IPPROTO_TCP);
-  if (INVALID_SOCKET == sHost)
+  if (INVALID_SOCKET == sHost) {
+    set_breadcrumb(node_id, "filedl_thread:socket_init_fail"); // 新增
+    writeLog(LOG_TYPE_FILEDL, "Socket init failed.");
     return -1;
+  }
+  set_breadcrumb(node_id, "filedl_thread:socket_init_ok"); // 新增
   push_socket(sHost);
   // defer(closesocket(sHost);) // close socket in main thread
   setTimeout(sHost, 5000);
-  if (startConnect(sHost, localaddr, localport) == SOCKET_ERROR ||
-      connectSocks5(sHost, username, password) == -1 ||
-      connectThruSocks(sHost, host, port) == -1)
+  if (startConnect(sHost, localaddr, localport) == SOCKET_ERROR) {
+    set_breadcrumb(node_id, "filedl_thread:startConnect_fail"); // 新增
+    writeLog(LOG_TYPE_FILEDL, "startConnect failed.");
     return -1;
+  } else {
+    set_breadcrumb(node_id, "filedl_thread:startConnect_ok"); // 新增
+  }
+  if (connectSocks5(sHost, username, password) == -1) {
+    set_breadcrumb(node_id, "filedl_thread:socks5_fail"); // 新增
+    writeLog(LOG_TYPE_FILEDL, "Socks5 auth/connect failed.");
+    return -1;
+  } else {
+    set_breadcrumb(node_id, "filedl_thread:socks5_ok"); // 新增
+  }
+  if (connectThruSocks(sHost, host, port) == -1) {
+    set_breadcrumb(node_id, "filedl_thread:socks_tunnel_fail"); // 新增
+    writeLog(LOG_TYPE_FILEDL, "Connect thru socks failed.");
+    return -1;
+  } else {
+    set_breadcrumb(node_id, "filedl_thread:socks_tunnel_ok"); // 新增
+  }
 
+  bool first_data = false; // 新增：首次数据标记
   if (useTLS) {
     SSL_CTX *ctx;
     SSL *ssl;
 
     ctx = SSL_CTX_new(TLS_client_method());
     if (ctx == NULL) {
+      set_breadcrumb(node_id, "filedl_thread:ssl_ctx_new_fail"); // 新增
       ERR_print_errors_fp(stderr);
       return -1;
     }
@@ -145,11 +171,15 @@ int _thread_download(std::string host, int port, std::string uri,
     SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
 
     if (SSL_connect(ssl) != 1) {
+      set_breadcrumb(node_id, "filedl_thread:ssl_connect_fail"); // 新增
       ERR_print_errors_fp(stderr);
     } else {
+      set_breadcrumb(node_id, "filedl_thread:ssl_connect_ok"); // 新增
       retVal = SSL_write(ssl, request.data(), request.size());
-      if (retVal == SOCKET_ERROR)
+      if (retVal == SOCKET_ERROR) {
+        set_breadcrumb(node_id, "filedl_thread:ssl_write_fail"); // 新增
         return -1;
+      }
       while (1) {
         cur_len = SSL_read(ssl, bufRecv, BUF_SIZE - 1);
         if (cur_len < 0) {
@@ -162,14 +192,22 @@ int _thread_download(std::string host, int port, std::string uri,
         if (cur_len == 0)
           break;
         received_bytes += cur_len;
+        if (!first_data) {
+          first_data = true;
+          set_breadcrumb(node_id,
+                         "filedl_thread:first_data"); // 新增：首次收到数据
+        }
         if (EXIT_FLAG)
           break;
       }
     }
   } else {
     retVal = Send(sHost, request.data(), request.size(), 0);
-    if (SOCKET_ERROR == retVal)
+    if (SOCKET_ERROR == retVal) {
+      set_breadcrumb(node_id, "filedl_thread:send_fail"); // 新增
       return -1;
+    }
+    set_breadcrumb(node_id, "filedl_thread:send_ok"); // 新增
     while (1) {
       cur_len = Recv(sHost, bufRecv, BUF_SIZE - 1, 0);
       if (cur_len < 0) {
@@ -182,10 +220,16 @@ int _thread_download(std::string host, int port, std::string uri,
       if (cur_len == 0)
         break;
       received_bytes += cur_len;
+      if (!first_data) {
+        first_data = true;
+        set_breadcrumb(node_id,
+                       "filedl_thread:first_data"); // 新增：首次收到数据
+      }
       if (EXIT_FLAG)
         break;
     }
   }
+  set_breadcrumb(node_id, "filedl_thread:exit_ok"); // 新增：线程自然退出
   return 0;
 }
 
@@ -275,13 +319,15 @@ struct thread_args {
   std::string username;
   std::string password;
   bool useTLS = false;
+  int node_id = -1; // 新增：用于面包屑定位具体节点
 };
 
 void *_thread_download_caller(void *arg) {
   thread_args *args = (thread_args *)arg;
+  set_breadcrumb(args->node_id, "filedl_thread:caller"); // 新增：进入 caller
   _thread_download(args->host, args->port, args->uri, args->localaddr,
                    args->localport, args->username, args->password,
-                   args->useTLS);
+                   args->useTLS, args->node_id); // 新增：透传 node_id
   return 0;
 }
 
@@ -304,6 +350,7 @@ int _thread_upload_curl(nodeInfo *node, std::string url, std::string proxy) {
 int perform_test(nodeInfo &node, std::string localaddr, int localport,
                  std::string username, std::string password, int thread_count) {
   writeLog(LOG_TYPE_FILEDL, "Multi-thread download test started.");
+  set_breadcrumb(node, "filedl:begin"); // 新增
   // prep up vars first
   std::string host, uri, testfile = node.testFile;
   int port = 0, i;
@@ -320,8 +367,8 @@ int perform_test(nodeInfo &node, std::string localaddr, int localport,
   } else {
     writeLog(LOG_TYPE_FILEDL, "Found HTTP URL.");
   }
-  thread_args args = {host,      port,     uri,      localaddr,
-                      localport, username, password, useTLS};
+  thread_args args = {host,     port,     uri,    localaddr, localport,
+                      username, password, useTLS, node.id}; // 新增 node.id
 
   std::vector<pthread_t> threads(thread_count);
   launched = 0;
@@ -334,6 +381,7 @@ int perform_test(nodeInfo &node, std::string localaddr, int localport,
   while (!launched)
     sleep(20); // wait until any one of the threads start up
 
+  set_breadcrumb(node, "filedl:threads_launched"); // 新增
   writeLog(LOG_TYPE_FILEDL, "All threads launched. Start accumulating data.");
   auto start = steady_clock::now();
   unsigned long long transferred_bytes = 0, last_bytes = 0, this_bytes = 0,
@@ -382,18 +430,23 @@ int perform_test(nodeInfo &node, std::string localaddr, int localport,
         "Running threads: " + std::to_string(running) +
             ", total received bytes: " + std::to_string(transferred_bytes) +
             ", current received bytes: " + std::to_string(this_bytes) + ".");
-    if (!running)
+    if (!running) {
+      set_breadcrumb(node,
+                     "filedl:no_running_threads"); // 新增：线程已全部退出
       break;
+    }
     draw_progress_dl(i, static_cast<int>(this_bytes));
 
     // 1) 达到总流量上限，提前结束
     if (DL_MAX_TOTAL_BYTES > 0 && transferred_bytes >= DL_MAX_TOTAL_BYTES) {
+      set_breadcrumb(node, "filedl:early_stop:max_total_bytes"); // 新增
       writeLog(LOG_TYPE_FILEDL, "Early stop: reached max total bytes limit.");
       break;
     }
 
     // 2) 低速早停：一定时间仍几乎无进展
     if (i >= DL_EARLY_ABORT_TICKS && transferred_bytes < DL_EARLY_ABORT_BYTES) {
+      set_breadcrumb(node, "filedl:early_stop:too_slow"); // 新增
       writeLog(LOG_TYPE_FILEDL, "Early stop: too slow (low total bytes).");
       break;
     }
@@ -420,6 +473,7 @@ int perform_test(nodeInfo &node, std::string localaddr, int localport,
         // 以 vmax 作为尺度，波动范围不超过 8% 视为稳定
         if (vmax > 0 && (vmax - vmin) <= static_cast<unsigned long long>(
                                              vmax * DL_STABLE_TOL)) {
+          set_breadcrumb(node, "filedl:early_stop:stabilized"); // 新增
           writeLog(LOG_TYPE_FILEDL, "Early stop: speed stabilized.");
           break;
         }
@@ -458,6 +512,7 @@ int perform_test(nodeInfo &node, std::string localaddr, int localport,
     writeLog(LOG_TYPE_FILEDL,
              "Thread #" + std::to_string(i + 1) + " has exited.");
   }
+  set_breadcrumb(node, "filedl:completed"); // 新增：下载测试完成
   writeLog(LOG_TYPE_FILEDL, "Multi-thread download test completed.");
   return 0;
 }
@@ -528,7 +583,7 @@ int upload_test(nodeInfo &node, std::string localaddr, int localport,
   this_bytes = received_bytes; // save current uploaded data
   auto end = steady_clock::now();
   auto duration = duration_cast<milliseconds>(end - start);
-  int deltatime = duration.count() + 1; // add 1 to prevent some error
+  int deltatime = duration.count() + 1; // add 1 to prevent some problem
   sleep(5);                             // slow down to prevent some problem
   node.ulSpeed = speedCalc(this_bytes * 1000.0 / deltatime);
   if (node.ulSpeed == "0.00B") {
@@ -659,7 +714,7 @@ int sitePing(nodeInfo &node, std::string localaddr, int localport,
                                    " failed.");
       continue;
     }
-    setTimeout(sHost, 5000);
+    setTimeout(sHost, 2000);
     if (connectSocks5(sHost, username, password) == -1) {
       writeLog(LOG_TYPE_GPING, "ERROR: SOCKS5 server authentication failed.");
       continue;

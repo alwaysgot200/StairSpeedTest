@@ -2,39 +2,12 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "C/C++ Debug (gdb Attach - local)",
-      "type": "cppdbg",
-      "request": "attach",
-      "program": "${workspaceFolder}/build/bin/stairspeedtest.exe",
-      "processId": "${command:pickProcess}",
-      "MIMode": "gdb",
-      "miDebuggerPath": "${env:MSYS2_ROOT}/mingw64/bin/gdb.exe",
-      "miDebuggerArgs": "--interpreter=mi2",
-      "setupCommands": [
-        {
-          "description": "Enable pretty-printing for gdb",
-          "text": "-enable-pretty-printing",
-          "ignoreFailures": true
-        },
-        { "text": "catch throw" },
-        { "text": "set breakpoint pending on" }
-      ],
-      "logging": {
-        "engineLogging": false,
-        "trace": false,
-        "traceResponse": false
-      }
-    },
-    {
-      "name": "Debug (gdb local, external console)",
+      "name": "Debug (gdb via console)",
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/build/bin/stairspeedtest.exe",
       "cwd": "${workspaceFolder}/build/bin",
-      "args": [
-        "/u",
-        "https://raw.gitcode.com/amessboy/DeployData/raw/main/result2"
-      ],
+      "args": ["/u", "https://gitee.com/amessboy/DeployData/raw/main/result2"], // "E:\\_cpp_work\\StairSpeedTest\\res\\sample.txt"], //
       "MIMode": "gdb",
       "miDebuggerPath": "${env:MSYS2_ROOT}/mingw64/bin/gdb.exe",
       "miDebuggerArgs": "--interpreter=mi2",
@@ -65,7 +38,7 @@
       }
     },
     {
-      "name": "Debug (gdb via MSYS2 bash)",
+      "name": "Debug (gdb via web)",
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/build/bin/stairspeedtest.exe",
