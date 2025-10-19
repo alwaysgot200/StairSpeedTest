@@ -71,10 +71,12 @@ build() {
 }
 
 run_cli() {
-  echo "[run] 运行 CLI 可执行文件..." 
+  echo "[run] 运行 CLI 可执行文件..."
+  #unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH PKG_CONFIG_PATH || true
   export MSYSTEM="MINGW64"
   export MSYS2_PATH_TYPE="inherit"
-  export MSYS2_ARG_CONV_EXCL="CMAKE_PREFIX_PATH;CMAKE_C_COMPILER;CMAKE_CXX_COMPILER;CMAKE_MAKE_PROGRAM"
+  # 禁用 MSYS2 参数路径转换，避免将 "/u" 与 URL 转换成路径
+  export MSYS2_ARG_CONV_EXCL="*"
   export PATH="${MSYS2_ROOT}/cmakeproxy:${MINGW_PREFIX}/bin:${MSYS2_ROOT}/usr/bin:${MSYS2_ROOT}/bin:${PATH}"
 
   local exe="${BUILD_DIR}/bin/${EXE_NAME}"
@@ -84,14 +86,16 @@ run_cli() {
   fi
   # 与 VSCode launch.json 的控制台模式一致：传入 /u <URL>
   local cli_args=("/u" "https://gitee.com/amessboy/DeployData/raw/main/result2")
-  (cd "${BUILD_DIR}/bin" && ./"${EXE_NAME}" "${cli_args[@]}")
+  (cd "${BUILD_DIR}/bin" && ./${EXE_NAME} "${cli_args[@]}")
 }
 
 run_web() {
-  echo "[run-web] 编译后的 Web 模式启动..." 
+  echo "[run-web] 编译后的 Web 模式启动..."
+  #unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH PKG_CONFIG_PATH || true
   export MSYSTEM="MINGW64"
   export MSYS2_PATH_TYPE="inherit"
-  export MSYS2_ARG_CONV_EXCL="CMAKE_PREFIX_PATH;CMAKE_C_COMPILER;CMAKE_CXX_COMPILER;CMAKE_MAKE_PROGRAM"
+  # 禁用 MSYS2 参数路径转换，避免将 "/web" 当作路径进行转换
+  export MSYS2_ARG_CONV_EXCL="*"
   export PATH="${MSYS2_ROOT}/cmakeproxy:${MINGW_PREFIX}/bin:${MSYS2_ROOT}/usr/bin:${MSYS2_ROOT}/bin:${PATH}"
 
   local exe="${BUILD_DIR}/bin/${EXE_NAME}"
@@ -104,7 +108,7 @@ run_web() {
   local web_cwd="${BUILD_DIR}/bin"
   local url="http://127.0.0.1:10870"
   echo "[run-web] 工作目录：${web_cwd}，静态资源：${web_cwd}/webui"
-  (cd "${web_cwd}" && ./"${EXE_NAME}" /web &)
+  (cd "${web_cwd}" && ./${EXE_NAME} /web) &
   local server_pid=$!
 
   # 打开默认浏览器访问 Web 页面
