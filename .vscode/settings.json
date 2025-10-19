@@ -4,6 +4,19 @@
     "CMAKE_CXX_COMPILER": "D:\\Programs\\scoop\\apps\\msys2\\current\\mingw64\\bin\\g++.exe"
   },
   "cmake.generator": "MinGW Makefiles",
+  // 终端：为本工程定义 MSYS2 MINGW64 终端并设为默认
+  "terminal.integrated.profiles.windows": {
+    "MSYS2 MINGW64": {
+      "path": "D:\\Programs\\scoop\\apps\\msys2\\current\\usr\\bin\\bash.exe",
+      "args": ["-l", "-i"],
+      "env": {
+        "MSYSTEM": "MINGW64",
+        "CHERE_INVOKING": "1"
+      },
+      "icon": "terminal-bash"
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "MSYS2 MINGW64",
   // 可选：若你不想 VSCode 自动在打开工程时触发 Configure，可显式关闭
   // "cmake.configureOnOpen": false,
   "cmake.options.advanced": {
