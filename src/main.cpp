@@ -20,6 +20,8 @@
 #include <atomic>
 #include <conio.h>
 #include <windows.h>
+#include <cstdlib>
+#include <cctype>
 #else
 #include <termios.h>
 #endif // _WIN32
@@ -136,7 +138,7 @@ static std::vector<int> allocateShardPorts(size_t count, int start_hint_port);
 static void processGeoIPResult(nodeInfo &node, int rpcmode, std::string id) {
   geoIPInfo outbound = node.outboundGeoIP.get();
   if (outbound.organization.size()) {
-    writeLog(LOG_TYPE_INFO, "Got outbound ISP: " + outbound.organization +
+    writeLog(LOG_TYPE_DEBUG, "Got outbound ISP: " + outbound.organization +
                                 "  Country code: " + outbound.country_code);
     printMsg(SPEEDTEST_MESSAGE_GOTGEOIP, rpcmode, id, outbound.organization,
              outbound.country_code);
@@ -180,65 +182,8 @@ static inline int to_int(const char *s) {
   }
 }
 
-#ifdef _WIN32
-static std::atomic<int> g_current_node_id{-1};
-static std::atomic<const char *> g_current_stage{"init"};
-static std::mutex g_breadcrumb_mutex;
-static std::string g_current_node_key;
-
-void set_breadcrumb(int node_id, const char *stage) {
-  g_current_node_id.store(node_id, std::memory_order_relaxed);
-  g_current_stage.store(stage, std::memory_order_relaxed);
-  // 构造节点键：id|linkType|server|port，如索引无效则使用占位
-  std::string key;
-  if (node_id >= 0 && node_id < static_cast<int>(allNodes.size())) {
-    const nodeInfo &n = allNodes[node_id];
-    key = std::to_string(n.id) + "|" + std::to_string(n.linkType) + "|" +
-          n.server + "|" + std::to_string(n.port);
-  } else {
-    key = std::to_string(node_id) + "|?|?|?";
-  }
-  {
-    std::lock_guard<std::mutex> lk(g_breadcrumb_mutex);
-    g_current_node_key = key;
-  }
-  writeLog(LOG_TYPE_INFO,
-           "Breadcrumb: node=" + key + " stage=" + std::string(stage));
-}
-
-static LONG WINAPI CrashUnhandledFilter(EXCEPTION_POINTERS *ep) {
-  std::string msg = "Unhandled exception. Last breadcrumb: node_id=" +
-                    std::to_string(g_current_node_id.load()) +
-                    " stage=" + std::string(g_current_stage.load());
-  writeLog(LOG_TYPE_ERROR, msg);
-  return EXCEPTION_EXECUTE_HANDLER;
-}
-
-static void installCrashFilter() {
-  SetUnhandledExceptionFilter(CrashUnhandledFilter);
-}
-
-// 新增：零查找重载版本，直接用传入的 node 构造节点键
-void set_breadcrumb(const nodeInfo &node, const char *stage) {
-  g_current_node_id.store(node.id, std::memory_order_relaxed);
-  g_current_stage.store(stage, std::memory_order_relaxed);
-
-  std::string key = std::to_string(node.id) + "|" +
-                    std::to_string(node.linkType) + "|" + node.server + "|" +
-                    std::to_string(node.port);
-  {
-    std::lock_guard<std::mutex> lk(g_breadcrumb_mutex);
-    g_current_node_key = key;
-  }
-  writeLog(LOG_TYPE_INFO,
-           "Breadcrumb: node=" + key + " stage=" + std::string(stage));
-}
-#else
-static inline void set_breadcrumb(int, const char *) {}
-static inline void installCrashFilter() {}
-// 非 Windows：为重载提供空实现，保持链接一致
-static inline void set_breadcrumb(const nodeInfo &, const char *) {}
-#endif
+// 旧的面包屑与崩溃拦截实现已移至 logger 模块
+// 这里删除本地实现，使用 logger.h 提供的统一接口与宏封装。
 
 // original codes
 
@@ -311,21 +256,21 @@ void clientCheck() {
 
   if (fileExist(v2core_path)) {
     avail_status[SPEEDTEST_MESSAGE_FOUNDVMESS] = 1;
-    writeLog(LOG_TYPE_INFO, "Found V2Ray core at path " + v2core_path);
+    writeLog(LOG_TYPE_DEBUG, "Found V2Ray core at path " + v2core_path);
   } else {
     avail_status[SPEEDTEST_MESSAGE_FOUNDVMESS] = 0;
     writeLog(LOG_TYPE_WARN, "V2Ray core not found at path " + v2core_path);
   }
   if (fileExist(v2core_path)) {
     avail_status[SPEEDTEST_MESSAGE_FOUNDVLESS] = 1;
-    writeLog(LOG_TYPE_INFO, "Found V2Ray core at path " + v2core_path);
+    writeLog(LOG_TYPE_DEBUG, "Found V2Ray core at path " + v2core_path);
   } else {
     avail_status[SPEEDTEST_MESSAGE_FOUNDVLESS] = 0;
     writeLog(LOG_TYPE_WARN, "V2Ray core not found at path " + v2core_path);
   }
   if (fileExist(ss_libev_path)) {
     avail_status[SPEEDTEST_MESSAGE_FOUNDSS] = 1;
-    writeLog(LOG_TYPE_INFO, "Found Shadowsocks-libev at path " + ss_libev_path);
+    writeLog(LOG_TYPE_DEBUG, "Found Shadowsocks-libev at path " + ss_libev_path);
   } else {
     avail_status[SPEEDTEST_MESSAGE_FOUNDSS] = 0;
     writeLog(LOG_TYPE_WARN,
@@ -333,7 +278,7 @@ void clientCheck() {
   }
   if (fileExist(ssr_libev_path)) {
     avail_status[SPEEDTEST_MESSAGE_FOUNDSSR] = 1;
-    writeLog(LOG_TYPE_INFO,
+    writeLog(LOG_TYPE_DEBUG,
              "Found ShadowsocksR-libev at path " + ssr_libev_path);
   } else {
     avail_status[SPEEDTEST_MESSAGE_FOUNDSSR] = 0;
@@ -342,7 +287,7 @@ void clientCheck() {
   }
   if (fileExist(trojan_path)) {
     avail_status[SPEEDTEST_MESSAGE_FOUNDTROJAN] = 1;
-    writeLog(LOG_TYPE_INFO, "Found Trojan at path " + trojan_path);
+    writeLog(LOG_TYPE_DEBUG, "Found Trojan at path " + trojan_path);
   } else {
     avail_status[SPEEDTEST_MESSAGE_FOUNDTROJAN] = 0;
     writeLog(LOG_TYPE_WARN, "Trojan not found at path " + trojan_path);
@@ -370,7 +315,7 @@ bool runClient(int client) {
 
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
-    writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    writeLog(LOG_TYPE_DEBUG, "Starting up v2ray core...");
     // 先对磁盘配置做预检，失败则不启动
     if (!testV2RayConfigFile("config.json", "")) {
       writeLog(LOG_TYPE_ERROR,
@@ -379,7 +324,7 @@ bool runClient(int client) {
     }
     return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDVLESS:
-    writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    writeLog(LOG_TYPE_DEBUG, "Starting up v2ray core...");
     // 同样进行预检
     if (!testV2RayConfigFile("config.json", "")) {
       writeLog(LOG_TYPE_ERROR,
@@ -389,24 +334,24 @@ bool runClient(int client) {
     return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDSSR:
     if (ssr_libev) {
-      writeLog(LOG_TYPE_INFO, "Starting up shadowsocksr-libev...");
+      writeLog(LOG_TYPE_DEBUG, "Starting up shadowsocksr-libev...");
       return runProgram(ssr_libev_path, "", false);
     } else {
-      writeLog(LOG_TYPE_INFO, "Starting up shadowsocksr-win...");
+      writeLog(LOG_TYPE_DEBUG, "Starting up shadowsocksr-win...");
       fileCopy("config.json", ssr_win_dir + "gui-config.json");
       return runProgram(ssr_win_path, "", false);
     }
   case SPEEDTEST_MESSAGE_FOUNDSS:
     if (ss_libev) {
-      writeLog(LOG_TYPE_INFO, "Starting up shadowsocks-libev...");
+      writeLog(LOG_TYPE_DEBUG, "Starting up shadowsocks-libev...");
       return runProgram(ss_libev_path, ss_libev_dir, false);
     } else {
-      writeLog(LOG_TYPE_INFO, "Starting up shadowsocks-win...");
+      writeLog(LOG_TYPE_DEBUG, "Starting up shadowsocks-win...");
       fileCopy("config.json", ss_win_dir + "gui-config.json");
       return runProgram(ss_win_path, ss_win_dir, false);
     }
   case SPEEDTEST_MESSAGE_FOUNDTROJAN:
-    writeLog(LOG_TYPE_INFO, "Starting up trojan...");
+    writeLog(LOG_TYPE_DEBUG, "Starting up trojan...");
     return runProgram(trojan_path, "", false);
   default:
     return false;
@@ -423,7 +368,7 @@ bool runClient(int client) {
 
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
-    writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    writeLog(LOG_TYPE_DEBUG, "Starting up v2ray core...");
     // 先对磁盘配置做预检，失败则不启动
     if (!testV2RayConfigFile("config.json", "")) {
       writeLog(LOG_TYPE_ERROR,
@@ -432,7 +377,7 @@ bool runClient(int client) {
     }
     return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDVLESS:
-    writeLog(LOG_TYPE_INFO, "Starting up v2ray core...");
+    writeLog(LOG_TYPE_DEBUG, "Starting up v2ray core...");
     // 同样进行预检
     if (!testV2RayConfigFile("config.json", "")) {
       writeLog(LOG_TYPE_ERROR,
@@ -441,13 +386,13 @@ bool runClient(int client) {
     }
     return runProgram(v2core_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDSSR:
-    writeLog(LOG_TYPE_INFO, "Starting up shadowsocksr-libev...");
+    writeLog(LOG_TYPE_DEBUG, "Starting up shadowsocksr-libev...");
     return runProgram(ssr_libev_path, "", false);
   case SPEEDTEST_MESSAGE_FOUNDSS:
-    writeLog(LOG_TYPE_INFO, "Starting up shadowsocks-libev...");
+    writeLog(LOG_TYPE_DEBUG, "Starting up shadowsocks-libev...");
     return runProgram(ss_libev_path, ss_libev_dir, false);
   case SPEEDTEST_MESSAGE_FOUNDTROJAN:
-    writeLog(LOG_TYPE_INFO, "Starting up trojan...");
+    writeLog(LOG_TYPE_DEBUG, "Starting up trojan...");
     return runProgram(trojan_path, "", false);
   default:
     return false;
@@ -493,33 +438,33 @@ int killClient(int client) {
 
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
-    writeLog(LOG_TYPE_INFO, "Killing v2ray core...");
+    writeLog(LOG_TYPE_DEBUG, "Killing v2ray core...");
     killProgram(v2core_name);
     break;
   case SPEEDTEST_MESSAGE_FOUNDVLESS:
-    writeLog(LOG_TYPE_INFO, "Killing v2ray core...");
+    writeLog(LOG_TYPE_DEBUG, "Killing v2ray core...");
     killProgram(v2core_name);
     break;
   case SPEEDTEST_MESSAGE_FOUNDSSR:
     if (ssr_libev) {
-      writeLog(LOG_TYPE_INFO, "Killing shadowsocksr-libev...");
+      writeLog(LOG_TYPE_DEBUG, "Killing shadowsocksr-libev...");
       killProgram(ssr_libev_name);
     } else {
-      writeLog(LOG_TYPE_INFO, "Killing shadowsocksr-win...");
+      writeLog(LOG_TYPE_DEBUG, "Killing shadowsocksr-win...");
       killProgram(ssr_win_name);
     }
     break;
   case SPEEDTEST_MESSAGE_FOUNDSS:
     if (ss_libev) {
-      writeLog(LOG_TYPE_INFO, "Killing shadowsocks-libev...");
+      writeLog(LOG_TYPE_DEBUG, "Killing shadowsocks-libev...");
       killProgram(ss_libev_name);
     } else {
-      writeLog(LOG_TYPE_INFO, "Killing shadowsocks-win...");
+      writeLog(LOG_TYPE_DEBUG, "Killing shadowsocks-win...");
       killProgram(ss_win_name);
     }
     break;
   case SPEEDTEST_MESSAGE_FOUNDTROJAN:
-    writeLog(LOG_TYPE_INFO, "Killing trojan...");
+    writeLog(LOG_TYPE_DEBUG, "Killing trojan...");
     killProgram(trojan_name);
     break;
   }
@@ -531,23 +476,23 @@ int killClient(int client) {
 
   switch (client) {
   case SPEEDTEST_MESSAGE_FOUNDVMESS:
-    writeLog(LOG_TYPE_INFO, "Killing v2ray core...");
+    writeLog(LOG_TYPE_DEBUG, "Killing v2ray core...");
     killProgram(v2core_name);
     break;
   case SPEEDTEST_MESSAGE_FOUNDVLESS:
-    writeLog(LOG_TYPE_INFO, "Killing v2ray core...");
+    writeLog(LOG_TYPE_DEBUG, "Killing v2ray core...");
     killProgram(v2core_name);
     break;
   case SPEEDTEST_MESSAGE_FOUNDSSR:
-    writeLog(LOG_TYPE_INFO, "Killing shadowsocksr-libev...");
+    writeLog(LOG_TYPE_DEBUG, "Killing shadowsocksr-libev...");
     killProgram(ssr_libev_name);
     break;
   case SPEEDTEST_MESSAGE_FOUNDSS:
-    writeLog(LOG_TYPE_INFO, "Killing shadowsocks-libev...");
+    writeLog(LOG_TYPE_DEBUG, "Killing shadowsocks-libev...");
     killProgram(ss_libev_name);
     break;
   case SPEEDTEST_MESSAGE_FOUNDTROJAN:
-    writeLog(LOG_TYPE_INFO, "Killing trojan...");
+    writeLog(LOG_TYPE_DEBUG, "Killing trojan...");
     killProgram(trojan_name);
     break;
   }
@@ -576,10 +521,22 @@ void readConf(std::string path) {
   ini.ParseFile(path);
 
   ini.EnterSection("common");
+  custom_exclude_remarks.clear();
+  custom_include_remarks.clear();
   if (ini.ItemPrefixExist("exclude_remark"))
     ini.GetAll("exclude_remark", custom_exclude_remarks);
+  if (ini.ItemPrefixExist("exclude_remarks")) {
+    string_array tmp;
+    ini.GetAll("exclude_remarks", tmp);
+    custom_exclude_remarks.insert(custom_exclude_remarks.end(), tmp.begin(), tmp.end());
+  }
   if (ini.ItemPrefixExist("include_remark"))
     ini.GetAll("include_remark", custom_include_remarks);
+  if (ini.ItemPrefixExist("include_remarks")) {
+    string_array tmp;
+    ini.GetAll("include_remarks", tmp);
+    custom_include_remarks.insert(custom_include_remarks.end(), tmp.begin(), tmp.end());
+  }
 
   ini.EnterSection("advanced");
   ini.GetIfExist("speedtest_mode", speedtest_mode);
@@ -950,7 +907,7 @@ int singleTest(nodeInfo &node) {
 
   set_breadcrumb(node, "singleTest:begin");
 
-  writeLog(LOG_TYPE_INFO,
+  writeLog(LOG_TYPE_DEBUG,
            "Received server. Group: " + node.group + " Name: " + node.remarks);
   defer(printMsg(SPEEDTEST_MESSAGE_GOTRESULT, rpcmode, node.avgSpeed,
                  node.maxSpeed, node.ulSpeed, node.pkLoss, node.avgPing,
@@ -966,7 +923,7 @@ int singleTest(nodeInfo &node) {
     printMsg(SPEEDTEST_MESSAGE_GOTSPEED, rpcmode, id, node.avgSpeed);
     printMsg(SPEEDTEST_MESSAGE_GOTUPD, rpcmode, id, node.ulSpeed);
     writeLog(
-        LOG_TYPE_INFO,
+        LOG_TYPE_DEBUG,
         "Average speed: " + node.avgSpeed + "  Max speed: " + node.maxSpeed +
             "  Upload speed: " + node.ulSpeed +
             "  Traffic used in bytes: " + std::to_string(node.totalRecvBytes));
@@ -985,7 +942,7 @@ int singleTest(nodeInfo &node) {
   else {
     testserver = socksaddr;
     testport = socksport;
-    writeLog(LOG_TYPE_INFO, "Writing config file...");
+    writeLog(LOG_TYPE_DEBUG, "Writing config file...");
     fileWrite("config.json", node.proxyStr,
               true); // make the right config file for client
     if (node.linkType != -1 && avail_status[node.linkType] == 1) {
@@ -1022,7 +979,7 @@ int singleTest(nodeInfo &node) {
   // Here begin TCP ping
   printMsg(SPEEDTEST_MESSAGE_STARTPING, rpcmode, id);
   if (speedtest_mode != "speedonly") {
-    writeLog(LOG_TYPE_INFO, "Now performing TCP ping...");
+    /* writeLog(LOG_TYPE_INFO, "Now performing TCP ping..."); */
     retVal = tcping(node);
     if (retVal == SPEEDTEST_ERROR_NORESOLVE) {
       writeLog(LOG_TYPE_ERROR, "Node address resolve error.");
@@ -1030,7 +987,7 @@ int singleTest(nodeInfo &node) {
       return SPEEDTEST_ERROR_NORESOLVE;
     }
     if (node.pkLoss == "100.00%") {
-      writeLog(LOG_TYPE_ERROR, "Cannot connect to this node.");
+      writeLog(LOG_TYPE_WARN, "Cannot connect to this node.", LOG_LEVEL_WARNING);
       printMsg(SPEEDTEST_ERROR_NOCONNECTION, rpcmode, id);
       return SPEEDTEST_ERROR_NOCONNECTION;
     }
@@ -1040,7 +997,7 @@ int singleTest(nodeInfo &node) {
           return std::move(a) + " " + std::to_string(b);
         });
     writeLog(LOG_TYPE_RAW, logdata);
-    writeLog(LOG_TYPE_INFO,
+    writeLog(LOG_TYPE_DEBUG,
              "TCP Ping: " + node.avgPing + "  Packet Loss: " + node.pkLoss);
   } else
     node.pkLoss = "0.00%";
@@ -1050,7 +1007,7 @@ int singleTest(nodeInfo &node) {
   if (test_site_ping) {
     printMsg(SPEEDTEST_MESSAGE_STARTGPING, rpcmode, id);
     set_breadcrumb(node, "singleTest:sitePing");
-    writeLog(LOG_TYPE_INFO, "Now performing site ping...");
+    /* writeLog(LOG_TYPE_INFO, "Now performing site ping..."); */
     // websitePing(node, "https://www.google.com/", testserver, testport,
     // username, password);
     sitePing(node, testserver, testport, username, password, site_ping_url);
@@ -1060,7 +1017,7 @@ int singleTest(nodeInfo &node) {
           return std::move(a) + " " + std::to_string(b);
         });
     writeLog(LOG_TYPE_RAW, logdata);
-    writeLog(LOG_TYPE_INFO, "Site ping: " + node.sitePing);
+    writeLog(LOG_TYPE_DEBUG, "Site ping: " + node.sitePing);
     printMsg(SPEEDTEST_MESSAGE_GOTGPING, rpcmode, id, node.sitePing);
     // 如果所有时延都失败，就返回
     bool anySuccess = false;
@@ -1082,7 +1039,7 @@ int singleTest(nodeInfo &node) {
   if (speedtest_mode != "pingonly") {
     set_breadcrumb(node, "singleTest:download");
     getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
-    writeLog(LOG_TYPE_INFO, "Now performing file download speed test...");
+    writeLog(LOG_TYPE_DEBUG, "Now performing file download speed test...");
     perform_test(node, testserver, testport, username, password,
                  def_thread_count);
     logdata = std::accumulate(
@@ -1117,7 +1074,7 @@ int singleTest(nodeInfo &node) {
            node.maxSpeed);
   if (test_upload) {
     set_breadcrumb(node, "singleTest:upload");
-    writeLog(LOG_TYPE_INFO, "Now performing upload speed test...");
+    writeLog(LOG_TYPE_DEBUG, "Now performing upload speed test...");
     printMsg(SPEEDTEST_MESSAGE_STARTUPD, rpcmode, id);
     upload_test(node, testserver, testport, username, password);
     printMsg(SPEEDTEST_MESSAGE_GOTUPD, rpcmode, id, node.ulSpeed);
@@ -1132,7 +1089,7 @@ int singleTest(nodeInfo &node) {
     }));
   }
   // Here begin the GeoIP test
-  writeLog(LOG_TYPE_INFO, "Now started fetching GeoIP info...");
+  writeLog(LOG_TYPE_DEBUG, "Now started fetching GeoIP info...");
   printMsg(SPEEDTEST_MESSAGE_STARTGEOIP, rpcmode, id);
   node.inboundGeoIP.set(std::async(
       std::launch::async, [node]() { return getGeoIPInfo(node.server, ""); }));
@@ -1152,7 +1109,7 @@ int singleTest(nodeInfo &node) {
   }
 
   // 总结测试结果
-  writeLog(LOG_TYPE_INFO,
+  writeLog(LOG_TYPE_DEBUG,
            "Average speed: " + node.avgSpeed + "  Max speed: " + node.maxSpeed +
                "  Upload speed: " + node.ulSpeed + "  Traffic used in bytes: " +
                std::to_string(node.totalRecvBytes));
@@ -1166,13 +1123,13 @@ void batchTest(std::vector<nodeInfo> &nodes) {
   long long tottraffic = 0;
   cur_node_id = -1;
 
-  writeLog(LOG_TYPE_INFO, "Total node(s) found: " + std::to_string(node_count));
+  writeLog(LOG_TYPE_DEBUG, "Total node(s) found: " + std::to_string(node_count));
   if (node_count == 0) {
     writeLog(LOG_TYPE_ERROR, "No nodes are found in this subscription.");
     printMsg(SPEEDTEST_ERROR_NONODES, rpcmode);
   } else {
     resultInit();
-    writeLog(LOG_TYPE_INFO, "Speedtest will now begin.");
+    writeLog(LOG_TYPE_DEBUG, "Speedtest will now begin.");
     printMsg(SPEEDTEST_MESSAGE_BEGIN, rpcmode);
     // first print out all nodes when in Web mode
     if (rpcmode) {
@@ -1223,7 +1180,7 @@ void batchTest(std::vector<nodeInfo> &nodes) {
       if (v2ray_group_concurrency > v2ray_shard_size)
         v2ray_group_concurrency = v2ray_shard_size;
 
-      writeLog(LOG_TYPE_INFO,
+      writeLog(LOG_TYPE_DEBUG,
                "v2ray_shard_size=" + std::to_string(v2ray_shard_size) +
                    ", v2ray_group_concurrency=" +
                    std::to_string(v2ray_group_concurrency));
@@ -1250,18 +1207,18 @@ void batchTest(std::vector<nodeInfo> &nodes) {
         onlines++;
     }
 
-    writeLog(LOG_TYPE_INFO,
+    writeLog(LOG_TYPE_DEBUG,
              "All nodes tested. Total/Online nodes: " +
                  std::to_string(node_count) + "/" + std::to_string(onlines) +
                  " Traffic used: " + speedCalc(tottraffic * 1.0));
     // saveResult(nodes);
     if (export_picture && (webserver_mode || !multilink)) {
       printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
-      writeLog(LOG_TYPE_INFO, "Now exporting result...");
+      writeLog(LOG_TYPE_DEBUG, "Now exporting result...");
       pngpath = exportRender(resultPath, nodes, export_with_maxspeed,
                              export_sort_method, export_color_style,
                              export_as_new_style, test_nat_type);
-      writeLog(LOG_TYPE_INFO, "Result saved to " + pngpath + " .");
+      writeLog(LOG_TYPE_DEBUG, "Result saved to " + pngpath + " .");
       printMsg(SPEEDTEST_MESSAGE_PICSAVED, rpcmode, pngpath);
       if (rpcmode)
         printMsg(SPEEDTEST_MESSAGE_PICDATA, rpcmode,
@@ -1434,7 +1391,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
   // 面包屑：并发测试（已就绪的 SOCKS）开始
   set_breadcrumb(node, "preparedSocks:begin");
 
-  writeLog(LOG_TYPE_INFO,
+  writeLog(LOG_TYPE_DEBUG,
            "Received server. Group: " + node.group + " Name: " + node.remarks);
   auto start = steady_clock::now();
 
@@ -1447,7 +1404,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
     // TCP ping（直连，不走代理）
     printMsg(SPEEDTEST_MESSAGE_STARTPING, rpcmode, id);
     if (speedtest_mode != "speedonly") {
-      writeLog(LOG_TYPE_INFO, "Now performing TCP ping...");
+      writeLog(LOG_TYPE_DEBUG, "Now performing TCP ping...");
       retVal = tcping(node);
       if (retVal == SPEEDTEST_ERROR_NORESOLVE) {
         writeLog(LOG_TYPE_ERROR, "Node address resolve error.");
@@ -1466,7 +1423,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
             return std::move(a) + " " + std::to_string(b);
           });
       writeLog(LOG_TYPE_RAW, logdata);
-      writeLog(LOG_TYPE_INFO,
+      writeLog(LOG_TYPE_DEBUG,
                "TCP Ping: " + node.avgPing + "  Packet Loss: " + node.pkLoss);
     } else {
       node.pkLoss = "0.00%";
@@ -1476,7 +1433,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
     // 开始测试google时延
     if (test_site_ping) {
       printMsg(SPEEDTEST_MESSAGE_STARTGPING, rpcmode, id);
-      writeLog(LOG_TYPE_INFO, "Now performing site ping...");
+      writeLog(LOG_TYPE_DEBUG, "Now performing site ping...");
 
       // 面包屑：站点时延阶段
       set_breadcrumb(node, "preparedSocks:sitePing");
@@ -1489,7 +1446,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
             return std::move(a) + " " + std::to_string(b);
           });
       writeLog(LOG_TYPE_RAW, logdata);
-      writeLog(LOG_TYPE_INFO, "Site ping: " + node.sitePing);
+      writeLog(LOG_TYPE_DEBUG, "Site ping: " + node.sitePing);
       printMsg(SPEEDTEST_MESSAGE_GOTGPING, rpcmode, id, node.sitePing);
       // 如果所有时延都失败，就返回
       bool anySuccess = false;
@@ -1510,7 +1467,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
     printMsg(SPEEDTEST_MESSAGE_STARTSPEED, rpcmode, id);
     if (speedtest_mode != "pingonly") {
       getTestFile(node, proxy, downloadFiles, matchRules, def_test_file);
-      writeLog(LOG_TYPE_INFO, "Now performing file download speed test...");
+      writeLog(LOG_TYPE_DEBUG, "Now performing file download speed test...");
 
       // 面包屑：下载测速阶段
       set_breadcrumb(node, "preparedSocks:download");
@@ -1558,7 +1515,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
 
     // 开始测试上传
     if (test_upload) {
-      writeLog(LOG_TYPE_INFO, "Now performing upload speed test...");
+      writeLog(LOG_TYPE_DEBUG, "Now performing upload speed test...");
       printMsg(SPEEDTEST_MESSAGE_STARTUPD, rpcmode, id);
 
       // 面包屑：上传测速阶段
@@ -1597,7 +1554,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
     }));
   }
   // 启动异步GeoIP检测任务// 获得IP所属国家区域信息
-  writeLog(LOG_TYPE_INFO, "Now started fetching GeoIP info...");
+  writeLog(LOG_TYPE_DEBUG, "Now started fetching GeoIP info...");
   printMsg(SPEEDTEST_MESSAGE_STARTGEOIP, rpcmode, id);
   node.inboundGeoIP.set(std::async(
       std::launch::async, [node]() { return getGeoIPInfo(node.server, ""); }));
@@ -1616,7 +1573,7 @@ static int testNodeViaPreparedSocks(nodeInfo &node,
   }
 
   // 开始总结
-  writeLog(LOG_TYPE_INFO,
+  writeLog(LOG_TYPE_DEBUG,
            "Average speed: " + node.avgSpeed + "  Max speed: " + node.maxSpeed +
                "  Upload speed: " + node.ulSpeed + "  Traffic used in bytes: " +
                std::to_string(node.totalRecvBytes));
@@ -1749,7 +1706,7 @@ static bool prepareShardConfigAndPorts(const std::vector<nodeInfo *> &shard,
   std::string config = buildAggregatedV2RayConfig(items);
 
   // 3) 写盘（config.json）
-  writeLog(LOG_TYPE_INFO, "Writing aggregated config file...");
+  writeLog(LOG_TYPE_DEBUG, "Writing aggregated config file...");
   fileWrite("config.json", config, true);
   return true;
 }
@@ -1962,7 +1919,7 @@ static void dedupNodesByProtoHostPort(std::vector<nodeInfo> &nodes) {
   }
 
   if (out.size() != nodes.size()) {
-    writeLog(LOG_TYPE_INFO, "Global de-dup (protocol+host+port): " +
+    writeLog(LOG_TYPE_DEBUG, "Global de-dup (protocol+host+port): " +
                                 std::to_string(nodes.size()) + " -> " +
                                 std::to_string(out.size()));
   }
@@ -1976,7 +1933,7 @@ void addNodes(std::string link, bool multilink) {
   std::string strSub, strInput, fileContent, strProxy;
 
   link = replace_all_distinct(link, "\"", "");
-  writeLog(LOG_TYPE_INFO, "Received Link.");
+  writeLog(LOG_TYPE_DEBUG, "Received Link.");
   if (startsWith(link, "vmess://") || startsWith(link, "vmess1://"))
     linkType = SPEEDTEST_MESSAGE_FOUNDVMESS;
   else if (startsWith(link, "vless://"))
@@ -2009,10 +1966,10 @@ void addNodes(std::string link, bool multilink) {
       getline(std::cin, strInput);
       if (strInput.size()) {
         custom_group = rpcmode ? strInput : ACPToUTF8(strInput);
-        writeLog(LOG_TYPE_INFO, "Received custom group: " + custom_group);
+        writeLog(LOG_TYPE_DEBUG, "Received custom group: " + custom_group);
       }
     }
-    writeLog(LOG_TYPE_INFO, "Downloading subscription data...");
+    writeLog(LOG_TYPE_DEBUG, "Downloading subscription data...");
     printMsg(SPEEDTEST_MESSAGE_FETCHSUB, rpcmode);
     if (strFind(link, "surge:///install-config")) // surge config link
       link = UrlDecode(getUrlArg(link, "url"));
@@ -2037,7 +1994,7 @@ void addNodes(std::string link, bool multilink) {
       }
     }
     if (strSub.size()) {
-      writeLog(LOG_TYPE_INFO, "Parsing subscription data...");
+      writeLog(LOG_TYPE_DEBUG, "Parsing subscription data...");
       explodeConfContent(strSub, override_conf_port, ss_libev, ssr_libev,
                          nodes);
       filterNodes(nodes, custom_exclude_remarks, custom_include_remarks,
@@ -2055,10 +2012,10 @@ void addNodes(std::string link, bool multilink) {
       getline(std::cin, strInput);
       if (strInput.size()) {
         custom_group = rpcmode ? strInput : ACPToUTF8(strInput);
-        writeLog(LOG_TYPE_INFO, "Received custom group: " + custom_group);
+        writeLog(LOG_TYPE_DEBUG, "Received custom group: " + custom_group);
       }
     }
-    writeLog(LOG_TYPE_INFO, "Parsing configuration file data...");
+    writeLog(LOG_TYPE_DEBUG, "Parsing configuration file data...");
     printMsg(SPEEDTEST_MESSAGE_PARSING, rpcmode);
 
     if (explodeLog(fileGet(link), nodes) == -1) {
@@ -2079,7 +2036,7 @@ void addNodes(std::string link, bool multilink) {
     // now we should ready to receive a large amount of data from stdin
     getline(std::cin, fileContent);
     fileContent = base64_decode(fileContent.substr(fileContent.find(",") + 1));
-    writeLog(LOG_TYPE_INFO, "Parsing configuration file data...");
+    writeLog(LOG_TYPE_DEBUG, "Parsing configuration file data...");
     printMsg(SPEEDTEST_MESSAGE_PARSING, rpcmode);
     if (explodeConfContent(fileContent, override_conf_port, ss_libev, ssr_libev,
                            nodes) == SPEEDTEST_ERROR_UNRECOGFILE) {
@@ -2153,7 +2110,10 @@ int main(int argc, char *argv[]) {
   makeDir("logs");
   makeDir("results");
   logInit(rpcmode);
-  readConf("pref.ini");
+#ifdef _WIN32
+  breadcrumbInitFromEnv();
+#endif
+  readConf(PrefsConfigPath());
 
 #ifdef _WIN32
   // start up windows socket library first
@@ -2191,8 +2151,8 @@ int main(int argc, char *argv[]) {
     writeLog(LOG_TYPE_ERROR, "No available local port starting from 32768.");
     return -1;
   }
-  writeLog(LOG_TYPE_INFO, "Using local port: " + std::to_string(socksport));
-  writeLog(LOG_TYPE_INFO, "Init completed.");
+  writeLog(LOG_TYPE_DEBUG, "Using local port: " + std::to_string(socksport));
+  writeLog(LOG_TYPE_DEBUG, "Init completed.");
   // intro message
   if (webserver_mode) {
     stairspeed_webserver_routine(listen_address, listen_port);
@@ -2206,7 +2166,7 @@ int main(int argc, char *argv[]) {
     getline(std::cin, link);
     if (!rpcmode)
       link = ACPToUTF8(link);
-    writeLog(LOG_TYPE_INFO, "Input data: " + link);
+    writeLog(LOG_TYPE_DEBUG, "Input data: " + link);
     if (rpcmode) {
       string_array webargs = split(link, "^");
       if (webargs.size() == 6) {
@@ -2243,14 +2203,14 @@ int main(int argc, char *argv[]) {
       if (export_picture) {
         if (multilink_export_as_one_image) {
           printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
-          writeLog(LOG_TYPE_INFO, "Now exporting result...");
+          writeLog(LOG_TYPE_DEBUG, "Now exporting result...");
           curPNGPath = replace_all_distinct(resultPath, ".log", "") +
                        "-multilink-all.png";
           pngpath = exportRender(curPNGPath, allNodes, export_with_maxspeed,
                                  export_sort_method, export_color_style,
                                  export_as_new_style, test_nat_type);
           printMsg(SPEEDTEST_MESSAGE_PICSAVED, rpcmode, pngpath);
-          writeLog(LOG_TYPE_INFO, "Result saved to " + pngpath + " .");
+          writeLog(LOG_TYPE_DEBUG, "Result saved to " + pngpath + " .");
           if (rpcmode)
             printMsg(SPEEDTEST_MESSAGE_PICDATA, rpcmode,
                      "data:image/png;base64," + fileToBase64(pngpath));
@@ -2266,7 +2226,7 @@ int main(int argc, char *argv[]) {
                 nodes.size() > 1) {
               printMsg(SPEEDTEST_MESSAGE_PICSAVINGMULTI, rpcmode,
                        std::to_string(i + 1));
-              writeLog(LOG_TYPE_INFO, "Now exporting result for group " +
+              writeLog(LOG_TYPE_DEBUG, "Now exporting result for group " +
                                           std::to_string(i + 1) + "...");
               curPNGPath = curPNGPathPrefix + "-multilink-group" +
                            std::to_string(i + 1) + ".png";
@@ -2275,36 +2235,36 @@ int main(int argc, char *argv[]) {
                                      export_as_new_style, test_nat_type);
               printMsg(SPEEDTEST_MESSAGE_PICSAVEDMULTI, rpcmode,
                        std::to_string(i + 1), pngpath);
-              writeLog(LOG_TYPE_INFO, "Group " + std::to_string(i + 1) +
+              writeLog(LOG_TYPE_DEBUG, "Group " + std::to_string(i + 1) +
                                           " result saved to " + pngpath + " .");
             } else
-              writeLog(LOG_TYPE_INFO, "Group " + std::to_string(i + 1) +
+              writeLog(LOG_TYPE_DEBUG, "Group " + std::to_string(i + 1) +
                                           " result export skipped.");
           }
         }
       } else {
-        writeLog(LOG_TYPE_INFO, "Result export skipped.");
+        writeLog(LOG_TYPE_DEBUG, "Result export skipped.");
       }
     }
-    writeLog(LOG_TYPE_INFO, "Multi-link test completed.");
+    writeLog(LOG_TYPE_DEBUG, "Multi-link test completed.");
   } else if (allNodes.size() == 1) {
-    writeLog(LOG_TYPE_INFO, "Speedtest will now begin.");
+    writeLog(LOG_TYPE_DEBUG, "Speedtest will now begin.");
     printMsg(SPEEDTEST_MESSAGE_BEGIN, rpcmode);
     singleTest(allNodes[0]);
     if (export_picture && single_test_force_export) {
       printMsg(SPEEDTEST_MESSAGE_PICSAVING, rpcmode);
-      writeLog(LOG_TYPE_INFO, "Now exporting result...");
+      writeLog(LOG_TYPE_DEBUG, "Now exporting result...");
       curPNGPath = "results" PATH_SLASH + getTime(1) + ".png";
       pngpath = exportRender(curPNGPath, allNodes, export_with_maxspeed,
                              export_sort_method, export_color_style,
                              export_as_new_style, test_nat_type);
       printMsg(SPEEDTEST_MESSAGE_PICSAVED, rpcmode, pngpath);
-      writeLog(LOG_TYPE_INFO, "Result saved to " + pngpath + " .");
+      writeLog(LOG_TYPE_DEBUG, "Result saved to " + pngpath + " .");
       if (rpcmode)
         printMsg(SPEEDTEST_MESSAGE_PICDATA, rpcmode,
                  "data:image/png;base64," + fileToBase64(pngpath));
     }
-    writeLog(LOG_TYPE_INFO, "Single node test completed.");
+    writeLog(LOG_TYPE_DEBUG, "Single node test completed.");
   } else {
     writeLog(LOG_TYPE_ERROR, "No valid link found.");
     printMsg(SPEEDTEST_ERROR_NORECOGLINK, rpcmode);

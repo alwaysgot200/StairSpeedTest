@@ -32,6 +32,8 @@ typedef jpcre2::select<char> jp;
 #include "md5.h"
 
 #include "misc.h"
+#include "ini_reader.h"
+#include <mutex>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -1253,3 +1255,71 @@ void ProcessEscapeCharReverse(std::string &str)
         pos++;
     }
 }
+
+// Prefs: centralized INI configuration accessors
+static std::once_flag g_prefs_once;
+static std::mutex g_prefs_mutex;
+static INIReader g_prefs_ini;
+static std::string g_prefs_path;
+
+static void PrefsInitImpl()
+{
+    g_prefs_path = "pref.ini";
+    if (!fileExist(g_prefs_path))
+        g_prefs_path = std::string("base") + PATH_SLASH + "pref.ini";
+    g_prefs_ini.ParseFile(g_prefs_path);
+}
+
+void PrefsInit()
+{
+    std::call_once(g_prefs_once, PrefsInitImpl);
+}
+
+const std::string& PrefsConfigPath()
+{
+    PrefsInit();
+    return g_prefs_path;
+}
+
+void PrefsReload()
+{
+    PrefsInit();
+    std::lock_guard<std::mutex> lk(g_prefs_mutex);
+    g_prefs_ini.ParseFile(g_prefs_path);
+}
+
+bool PrefsGetBool(const std::string &section, const std::string &key, bool default_value)
+{
+    PrefsInit();
+    std::lock_guard<std::mutex> lk(g_prefs_mutex);
+    g_prefs_ini.EnterSection(section);
+    bool v = default_value;
+    g_prefs_ini.GetBoolIfExist(key, v);
+    return v;
+}
+
+int PrefsGetInt(const std::string &section, const std::string &key, int default_value)
+{
+    PrefsInit();
+    std::lock_guard<std::mutex> lk(g_prefs_mutex);
+    g_prefs_ini.EnterSection(section);
+    int v = default_value;
+    g_prefs_ini.GetIntIfExist(key, v);
+    return v;
+}
+
+std::string PrefsGetStr(const std::string &section, const std::string &key, const std::string &default_value)
+{
+    PrefsInit();
+    std::lock_guard<std::mutex> lk(g_prefs_mutex);
+    g_prefs_ini.EnterSection(section);
+    std::string v = default_value;
+    g_prefs_ini.GetIfExist(key, v);
+    return v;
+}
+
+bool PrefsBreadcrumbEnabled(bool default_value)
+{
+    return PrefsGetBool("advanced", "breadcrumb_enabled", default_value);
+}
+

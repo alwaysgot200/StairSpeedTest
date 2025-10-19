@@ -3458,7 +3458,7 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
     pcre2_jit_compile(include_patterns.back().get(), 0);
   }
 
-  writeLog(LOG_TYPE_INFO, "Filter started.");
+  writeLog(LOG_TYPE_DEBUG, "Filter started.");
 
   // Parallel filtering for large lists
   const size_t parallel_threshold = 512;
@@ -3548,14 +3548,14 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
     node_index = 0;
     for (size_t idx = 0; idx < nodes.size(); ++idx) {
       if (keep[idx]) {
-        writeLog(LOG_TYPE_INFO, "Node  " + nodes[idx].group + " - " +
+        writeLog(LOG_TYPE_DEBUG, "Node  " + nodes[idx].group + " - " +
                                     nodes[idx].remarks + "  has been added.");
         nodes[idx].id = node_index;
         nodes[idx].groupID = groupID;
         ++node_index;
         filtered.emplace_back(std::move(nodes[idx]));
       } else {
-        writeLog(LOG_TYPE_INFO,
+        writeLog(LOG_TYPE_DEBUG,
                  "Node  " + nodes[idx].group + " - " + nodes[idx].remarks +
                      "  has been ignored and will not be added.");
       }
@@ -3605,12 +3605,12 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
       }
 
       if (excluded || !included) {
-        writeLog(LOG_TYPE_INFO,
+        writeLog(LOG_TYPE_DEBUG,
                  "Node  " + iter->group + " - " + iter->remarks +
                      "  has been ignored and will not be added.");
         iter = nodes.erase(iter);
       } else {
-        writeLog(LOG_TYPE_INFO, "Node  " + iter->group + " - " + iter->remarks +
+        writeLog(LOG_TYPE_DEBUG, "Node  " + iter->group + " - " + iter->remarks +
                                     "  has been added.");
         iter->id = node_index;
         iter->groupID = groupID;
@@ -3620,7 +3620,7 @@ void filterNodes(std::vector<nodeInfo> &nodes, string_array &exclude_remarks,
     }
   }
 
-  writeLog(LOG_TYPE_INFO, "Filter done.");
+  writeLog(LOG_TYPE_DEBUG, "Filter done.");
 }
 
 unsigned long long streamToInt(const std::string &stream) {

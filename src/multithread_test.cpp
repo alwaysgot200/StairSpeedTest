@@ -23,8 +23,6 @@ using namespace std::chrono;
 std::queue<SOCKET> opened_socket;
 
 #define MAX_FILE_SIZE 512 * 1024 * 1024
-extern void set_breadcrumb(int node_id, const char *stage);
-extern void set_breadcrumb(const nodeInfo &node, const char *stage);
 // for use of site ping
 const int times_to_ping = 10, fail_limit = 2;
 

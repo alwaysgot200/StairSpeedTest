@@ -552,7 +552,7 @@ static void dedupNodesByProtoHostPort_web(std::vector<nodeInfo> &nodes) {
   }
 
   if (out.size() != nodes.size()) {
-    writeLog(LOG_TYPE_INFO, "Global de-dup (protocol+host+port): " +
+    writeLog(LOG_TYPE_DEBUG, "Global de-dup (protocol+host+port): " +
                                 std::to_string(nodes.size()) + " -> " +
                                 std::to_string(out.size()));
   }

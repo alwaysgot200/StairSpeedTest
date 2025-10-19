@@ -383,4 +383,15 @@ static inline int md(const char *path)
 void StringToWstring(std::wstring& szDst, const std::string &str);
 #endif // _WIN32
 
+// Prefs unified INI accessors
+void PrefsInit();
+const std::string& PrefsConfigPath();
+void PrefsReload();
+bool PrefsGetBool(const std::string &section, const std::string &key, bool default_value);
+int PrefsGetInt(const std::string &section, const std::string &key, int default_value);
+std::string PrefsGetStr(const std::string &section, const std::string &key, const std::string &default_value);
+
+// Convenience helpers
+bool PrefsBreadcrumbEnabled(bool default_value);
+
 #endif // MISC_H_INCLUDED

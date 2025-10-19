@@ -98,6 +98,35 @@ else()
     target_compile_definitions(${APP_TARGET} PRIVATE ENABLE_PERF_TOOLS=0)
 endif()
 
+# Breadcrumb logging: default off in Release, on in Debug. Can override via ENABLE_BREADCRUMB_LOGS.
+option(ENABLE_BREADCRUMB_LOGS "Enable breadcrumb debug logging (file IO)" ON)
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(ENABLE_BREADCRUMB_LOGS OFF)
+endif()
+
+# Apply compile definitions for single-config generators
+if(ENABLE_BREADCRUMB_LOGS)
+    target_compile_definitions(${APP_TARGET} PRIVATE BREADCRUMB_ENABLED=1)
+    target_compile_definitions(${CORE_TARGET} PRIVATE BREADCRUMB_ENABLED=1)
+else()
+    target_compile_definitions(${APP_TARGET} PRIVATE BREADCRUMB_ENABLED=0)
+    target_compile_definitions(${CORE_TARGET} PRIVATE BREADCRUMB_ENABLED=0)
+endif()
+
+# Also handle multi-config generators (MSVC/Visual Studio)
+target_compile_definitions(${APP_TARGET} PRIVATE
+    $<$<CONFIG:Debug>:BREADCRUMB_ENABLED=1>
+    $<$<CONFIG:RelWithDebInfo>:BREADCRUMB_ENABLED=1>
+    $<$<CONFIG:Release>:BREADCRUMB_ENABLED=0>
+    $<$<CONFIG:MinSizeRel>:BREADCRUMB_ENABLED=0>
+)
+target_compile_definitions(${CORE_TARGET} PRIVATE
+    $<$<CONFIG:Debug>:BREADCRUMB_ENABLED=1>
+    $<$<CONFIG:RelWithDebInfo>:BREADCRUMB_ENABLED=1>
+    $<$<CONFIG:Release>:BREADCRUMB_ENABLED=0>
+    $<$<CONFIG:MinSizeRel>:BREADCRUMB_ENABLED=0>
+)
+
 # 将运行时资源复制到可执行文件所在目录（例如 build 输出目录）
 add_custom_command(TARGET ${APP_TARGET} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${OUTPUT_BIN_DIR}"
