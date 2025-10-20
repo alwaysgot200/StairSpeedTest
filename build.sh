@@ -73,7 +73,6 @@ build() {
     echo "[build] 生成可执行文件：${exe}"
   fi
 }
-
 run_cli() {
   echo "[run] 运行 CLI 可执行文件..."
   #unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH PKG_CONFIG_PATH || true
@@ -89,7 +88,7 @@ run_cli() {
     build
   fi
   # 与 VSCode launch.json 的控制台模式一致：传入 /u <URL>
-  local cli_args=("/u" "https://gitee.com/amessboy/DeployData/raw/main/result2")
+  local cli_args=("/u" "https://gitee.com/amessboy/DeployData/raw/main/m_result")
   (cd "${BUILD_DIR}/bin" && ./${EXE_NAME} "${cli_args[@]}")
 }
 

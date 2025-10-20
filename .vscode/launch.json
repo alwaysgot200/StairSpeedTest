@@ -7,7 +7,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/bin/stairspeedtest.exe",
       "cwd": "${workspaceFolder}/build/bin",
-      "args": ["/u", "https://gitee.com/amessboy/DeployData/raw/main/result2"], // "E:\\_cpp_work\\StairSpeedTest\\res\\sample.txt"], //
+      "args": ["/u", "https://gitee.com/amessboy/DeployData/raw/main/m_result"], // "E:\\_cpp_work\\StairSpeedTest\\res\\sample.txt"], //
       "MIMode": "gdb",
       "miDebuggerPath": "${env:MSYS2_ROOT}/mingw64/bin/gdb.exe",
       "miDebuggerArgs": "--interpreter=mi2",
